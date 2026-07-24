@@ -1,0 +1,45 @@
+[workspace]
+members = [
+    "crates/vectordb",
+    "crates/vectordb-core",
+    "crates/vectordb-index",
+    "crates/vectordb-scalar",
+    "crates/vectordb-simd",
+    "crates/vectordb-store",
+    "crates/vectordb-text",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.93.1"
+publish = false
+
+[workspace.dependencies]
+half = "2"
+thiserror = "2"
+vectordb-core = { path = "crates/vectordb-core", version = "=0.0.0" }
+vectordb-index = { path = "crates/vectordb-index", version = "=0.0.0" }
+vectordb-scalar = { path = "crates/vectordb-scalar", version = "=0.0.0" }
+vectordb-simd = { path = "crates/vectordb-simd", version = "=0.0.0" }
+vectordb-store = { path = "crates/vectordb-store", version = "=0.0.0" }
+vectordb-text = { path = "crates/vectordb-text", version = "=0.0.0" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Domain modules intentionally repeat their type names when that improves discoverability.
+module_name_repetitions = "allow"
+# Public error documentation is added with each API contract, not forced on private scaffolding.
+missing_errors_doc = "allow"
+# Panic sections are required where panic is contractual, not for trivially infallible helpers.
+missing_panics_doc = "allow"
+# Public builders and accessors are not automatically required to carry `#[must_use]`.
+must_use_candidate = "allow"
+# Configuration types may legitimately use several independent boolean switches.
+struct_excessive_bools = "allow"
+# Cohesive protocol code is easier to audit when it is not split solely to satisfy a line limit.
+too_many_lines = "allow"
