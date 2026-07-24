@@ -1,0 +1,17 @@
+[package]
+name = "vectordb"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+vectordb-core.workspace = true
+vectordb-index.workspace = true
+vectordb-scalar.workspace = true
+vectordb-simd.workspace = true
+vectordb-store.workspace = true
+vectordb-text.workspace = true
+
+[lints]
+workspace = true

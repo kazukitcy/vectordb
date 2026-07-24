@@ -1,0 +1,32 @@
+[advisories]
+ignore = []
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "MIT",
+    # Anticipated for unicode-ident once thiserror's proc-macro graph is wired in.
+    "Unicode-3.0",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+highlight = "all"
+skip = [
+    # zerocopy-derive (via half) still uses syn 2 while thiserror-impl uses syn 3.
+    # Proc-macro-only duplicate; drop this entry once the graph converges on syn 3.
+    { name = "syn", version = "2" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
