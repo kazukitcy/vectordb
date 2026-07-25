@@ -187,6 +187,23 @@ fn f16_preserves_ieee_754_bits_and_partial_comparison_semantics() {
 }
 
 #[test]
+fn f16_from_f32_rounds_to_nearest_ties_to_even() {
+    // Each midpoint sits exactly between two adjacent f16 values; ties-to-even keeps the even
+    // neighbor, which distinguishes it from truncation and from ties-away-from-zero.
+    let midpoint_below_odd = f32::from_bits(0x3F80_1000); // 1 + 2^-11, between 0x3c00 and 0x3c01
+    let midpoint_above_odd = f32::from_bits(0x3F80_3000); // 1 + 3 * 2^-11, between 0x3c01 and 0x3c02
+    assert_eq!(F16::from_f32(midpoint_below_odd).to_bits(), 0x3c00);
+    assert_eq!(F16::from_f32(midpoint_above_odd).to_bits(), 0x3c02);
+
+    for bits in 0..=u16::MAX {
+        let value = F16::from_bits(bits);
+        if value.is_finite() {
+            assert_eq!(F16::from_f32(value.to_f32()).to_bits(), bits);
+        }
+    }
+}
+
+#[test]
 fn schema_builds_scalar_and_vector_fields() {
     let title = FieldSchema::builder("title", DataType::String)
         .nullable(true)
@@ -284,6 +301,25 @@ fn sparse_field_dimension_is_bounded_by_u32_coordinates() {
 
         let error = FieldSchema::builder("sparse", data_type)
             .dimension(unrepresentable_dimension)
+            .build_with_limits(&limits)
+            .unwrap_err();
+        assert_invalid_argument(&error);
+    }
+}
+
+#[test]
+fn sparse_field_dimension_obeys_the_configured_limit() {
+    let mut limits = Limits::default();
+    limits.max_vector_dimension = 4;
+
+    for data_type in [DataType::SparseVectorF32, DataType::SparseVectorF16] {
+        FieldSchema::builder("sparse", data_type)
+            .dimension(limits.max_vector_dimension)
+            .build_with_limits(&limits)
+            .unwrap();
+
+        let error = FieldSchema::builder("sparse", data_type)
+            .dimension(limits.max_vector_dimension + 1)
             .build_with_limits(&limits)
             .unwrap_err();
         assert_invalid_argument(&error);
@@ -862,7 +898,7 @@ fn doc_enforces_the_configured_sparse_entry_limit() {
         .build_with_limits(&limits)
         .unwrap();
     let schema = Schema::builder()
-        .limits(limits)
+        .limits(limits.clone())
         .field(field)
         .build()
         .unwrap();
@@ -874,4 +910,54 @@ fn doc_enforces_the_configured_sparse_entry_limit() {
     let mut over_limit = Doc::new();
     over_limit.set_sparse_vector_f32("sparse", vec![0, 1, 2], vec![1.0, 2.0, 3.0]);
     assert_invalid_argument(&over_limit.validate(&schema).unwrap_err());
+
+    let mut zeros_at_limit = Doc::new();
+    zeros_at_limit.set_sparse_vector_f32("sparse", vec![0, 3], vec![0.0, -0.0]);
+    zeros_at_limit.validate(&schema).unwrap();
+    let (_, values) = zeros_at_limit
+        .get_sparse_vector_f32("sparse")
+        .unwrap()
+        .unwrap();
+    assert_eq!(values[0].to_bits(), 0.0_f32.to_bits());
+    assert_eq!(values[1].to_bits(), (-0.0_f32).to_bits());
+
+    let mut zeros_over_limit = Doc::new();
+    zeros_over_limit.set_sparse_vector_f32("sparse", vec![0, 1, 2], vec![0.0, -0.0, 1.0]);
+    assert_invalid_argument(&zeros_over_limit.validate(&schema).unwrap_err());
+
+    let f16_field = FieldSchema::builder("sparse", DataType::SparseVectorF16)
+        .dimension(4)
+        .build_with_limits(&limits)
+        .unwrap();
+    let f16_schema = Schema::builder()
+        .limits(limits)
+        .field(f16_field)
+        .build()
+        .unwrap();
+
+    let mut f16_zeros_at_limit = Doc::new();
+    f16_zeros_at_limit.set_sparse_vector_f16(
+        "sparse",
+        vec![0, 3],
+        vec![F16::from_bits(0x0000), F16::from_bits(0x8000)],
+    );
+    f16_zeros_at_limit.validate(&f16_schema).unwrap();
+    let (_, f16_values) = f16_zeros_at_limit
+        .get_sparse_vector_f16("sparse")
+        .unwrap()
+        .unwrap();
+    assert_eq!(f16_values[0].to_bits(), 0x0000);
+    assert_eq!(f16_values[1].to_bits(), 0x8000);
+
+    let mut f16_zeros_over_limit = Doc::new();
+    f16_zeros_over_limit.set_sparse_vector_f16(
+        "sparse",
+        vec![0, 1, 2],
+        vec![
+            F16::from_bits(0x0000),
+            F16::from_f32(1.0),
+            F16::from_bits(0x8000),
+        ],
+    );
+    assert_invalid_argument(&f16_zeros_over_limit.validate(&f16_schema).unwrap_err());
 }

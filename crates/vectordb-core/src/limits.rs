@@ -5,21 +5,24 @@
 // valid input), so getters would only add ceremony. Validation happens where limits are consumed.
 /// Configurable resource and request limits.
 ///
-/// The defaults define the version 1 limits. Applications may start with [`Limits::default`],
-/// adjust individual limits, and then build a [`Schema`](crate::Schema).
+/// Applications may start with [`Limits::default`], adjust individual limits, and then build a
+/// [`Schema`](crate::Schema).
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Limits {
     // For dense vectors this caps the stored element count; for sparse vectors it caps the index
     // space, which is independently bounded by the u32 coordinate type (see schema.rs).
-    /// Maximum dimension accepted for a dense or sparse vector field.
+    /// Upper bound on the dimension of a dense or sparse vector field.
+    ///
+    /// Dimension validation applies further rules beyond this bound; they are documented on
+    /// [`FieldSchemaBuilder::build_with_limits`](crate::FieldSchemaBuilder::build_with_limits).
     pub max_vector_dimension: usize,
-    // Deliberately counts entries, not non-zero values. Validation does not classify or drop
-    // zero-valued entries, so the limit applies to stored entries exactly as supplied.
+    // Deliberately counts every stored entry. Validation does not classify or drop zero-valued
+    // entries, so the limit applies to stored entries exactly as supplied.
     /// Maximum number of stored entries in one sparse vector.
     ///
-    /// Sparse vectors normally store non-zero values, but entries containing `0.0` or `-0.0` are
-    /// accepted and count toward this limit; validation does not remove them implicitly.
+    /// Entries containing `0.0` or `-0.0` are accepted and count toward this limit; validation
+    /// does not remove them implicitly.
     pub max_sparse_vector_entries: usize,
     // Aggregate index-building, memory, and flush costs grow roughly linearly with the number of
     // vector fields, so this cap prevents runaway schemas. Scalar and array field counts are
