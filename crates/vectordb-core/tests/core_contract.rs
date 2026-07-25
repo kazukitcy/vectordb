@@ -204,6 +204,32 @@ fn f16_from_f32_rounds_to_nearest_ties_to_even() {
 }
 
 #[test]
+fn f16_from_f32_rounds_ties_to_even_at_binary16_range_transitions() {
+    // Each constant is the exact f32 midpoint between two adjacent binary16 values, chosen to
+    // span the zero, subnormal, normal, and overflow ranges; ties-to-even keeps the even
+    // neighbor there just as it does for normal values.
+    let zero_tie = f32::from_bits(0x3300_0000); // 2^-25, between 0x0000 and 0x0001
+    assert_eq!(F16::from_f32(zero_tie).to_bits(), 0x0000);
+    assert_eq!(F16::from_f32(-zero_tie).to_bits(), 0x8000);
+    assert_eq!(F16::from_f32(f32::from_bits(0x3300_0001)).to_bits(), 0x0001);
+
+    let subnormal_tie = f32::from_bits(0x33C0_0000); // 3 * 2^-25, between 0x0001 and 0x0002
+    assert_eq!(F16::from_f32(subnormal_tie).to_bits(), 0x0002);
+    assert_eq!(F16::from_f32(-subnormal_tie).to_bits(), 0x8002);
+
+    let normal_boundary_tie = f32::from_bits(0x387F_E000); // 2047 * 2^-25, between 0x03FF and 0x0400
+    assert_eq!(F16::from_f32(normal_boundary_tie).to_bits(), 0x0400);
+
+    // 65520 is the midpoint between the largest finite binary16 value (65504) and 2^16; from
+    // there on the conversion overflows to infinity, while anything nearer stays finite.
+    assert_eq!(F16::from_f32(65_520.0).to_bits(), 0x7c00);
+    assert_eq!(F16::from_f32(-65_520.0).to_bits(), 0xfc00);
+    let below_overflow_tie = f32::from_bits(65_520.0_f32.to_bits() - 1); // 65519.99609375
+    assert_eq!(F16::from_f32(below_overflow_tie).to_bits(), 0x7bff);
+    assert_eq!(F16::from_f32(-below_overflow_tie).to_bits(), 0xfbff);
+}
+
+#[test]
 fn schema_builds_scalar_and_vector_fields() {
     let title = FieldSchema::builder("title", DataType::String)
         .nullable(true)
@@ -324,6 +350,49 @@ fn sparse_field_dimension_obeys_the_configured_limit() {
             .unwrap_err();
         assert_invalid_argument(&error);
     }
+}
+
+#[test]
+fn zero_valued_limits_reject_rather_than_disable_enforcement() {
+    let mut limits = Limits::default();
+    limits.max_vector_dimension = 0;
+    for data_type in [DataType::DenseVectorF32, DataType::SparseVectorF32] {
+        let error = FieldSchema::builder("vector", data_type)
+            .dimension(1)
+            .build_with_limits(&limits)
+            .unwrap_err();
+        assert_invalid_argument(&error);
+    }
+
+    let mut limits = Limits::default();
+    limits.max_vector_fields = 0;
+    Schema::builder().limits(limits.clone()).build().unwrap();
+    let error = Schema::builder()
+        .limits(limits)
+        .field(vector_field("vector", DataType::DenseVectorF32, 1))
+        .build()
+        .unwrap_err();
+    assert_invalid_argument(&error);
+
+    let mut limits = Limits::default();
+    limits.max_sparse_vector_entries = 0;
+    let sparse_field = FieldSchema::builder("sparse", DataType::SparseVectorF32)
+        .dimension(4)
+        .build_with_limits(&limits)
+        .unwrap();
+    let schema = Schema::builder()
+        .limits(limits)
+        .field(sparse_field)
+        .build()
+        .unwrap();
+
+    let mut empty = Doc::new();
+    empty.set_sparse_vector_f32("sparse", Vec::new(), Vec::new());
+    empty.validate(&schema).unwrap();
+
+    let mut one_entry = Doc::new();
+    one_entry.set_sparse_vector_f32("sparse", vec![0], vec![1.0]);
+    assert_invalid_argument(&one_entry.validate(&schema).unwrap_err());
 }
 
 #[test]
