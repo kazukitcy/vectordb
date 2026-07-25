@@ -167,6 +167,12 @@ fn error_exposes_every_m0_category_through_constructors() {
 }
 
 #[test]
+fn f16_layout_is_one_u16() {
+    assert_eq!(std::mem::size_of::<F16>(), 2);
+    assert_eq!(std::mem::align_of::<F16>(), 2);
+}
+
+#[test]
 fn f16_preserves_ieee_754_bits_and_partial_comparison_semantics() {
     for bits in 0..=u16::MAX {
         assert_eq!(F16::from_bits(bits).to_bits(), bits);

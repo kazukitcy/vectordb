@@ -17,7 +17,7 @@ smallest change that passes, and then refactor while the checks remain green.
 
 - `vectordb` is the public facade and assembles the other workspace crates.
 - `vectordb-core` owns shared API contracts, types, configuration, limits, and errors.
-- `vectordb-simd` owns scalar reference and runtime-dispatched distance kernels.
+- `vectordb-simd` owns scalar reference and runtime-dispatched vector score kernels.
 - `vectordb-index` owns vector indexes and quantization.
 - `vectordb-store` owns segments, durability, recovery, and read views.
 - `vectordb-scalar` owns scalar inverted indexes and filter execution.

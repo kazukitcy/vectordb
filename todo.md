@@ -192,14 +192,23 @@ u32 の `RoaringBitmap` との取り違えに注意し、`u32::MAX` 境界のテ
 ### M1 — 距離カーネル(vectordb-simd)
 
 - [ ] スカラー参照実装: f32/f16/i8 × {squared L2, inner product(負値で「小さいほど良い」に統一), cosine}
-- [ ] cosine は「挿入時正規化 + IP」で実装(元ノルムは別途保持し復元可能に)
+- [ ] cosine は「挿入時正規化 + IP」で実装。M1 は正規化ヘルパ(`l2_norm` /
+  `normalize_l2`、ノルムは f32 範囲超過に備え f64 で返す)と「正規化済み入力」前提の
+  カーネル契約を提供し、挿入時の正規化実行と元ノルムの保持・復元は M3 ストレージ層の
+  責務とする(ADR 0002)。i8 の cosine はエンドツーエンド意味論(スケール/バイアスと
+  補正項)を M6 で定義する
 - [ ] ランタイム CPU 検出 + ディスパッチ。**カーネル毎の必要機能マトリクス**を定義:
   f32 → AVX2 / AVX-512 / NEON、f16 → x86 は F16C で f32 変換後に f32 演算(AVX-512FP16 は
-  任意対応)、aarch64 は NEON+fp16 でネイティブ演算、i8 → AVX2 / AVX512-VNNI / NEON dot。
+  任意対応)、aarch64 は f32 変換 + NEON f32 演算(ネイティブ fp16 演算は
+  `stdarch_neon_f16` の安定化待ちで先送り)、i8 → AVX2 / AVX512-VNNI / NEON widening
+  積和(`vdotq_s32` は `stdarch_neon_dotprod` の安定化待ちで先送り)。
   f16 の利点は帯域/容量であり演算速度の向上を謳わない
-- [ ] 各経路の強制実行テスト(dispatch を固定して全経路を CI で実行)+ 未対応 CPU での
-  スカラーフォールバック
-- [ ] 1対多バッチ距離 API(グラフ探索のホットパス)+ prefetch フック
+- [ ] 経路選択の網羅テスト: 純粋なリゾルバ関数に対する合成 feature マスクテストで
+  全経路×欠損機能×未実装経路の組合せを検証し、実ハードウェア実行は CI レグ毎の必須
+  経路(Linux x86_64 = AVX2、macOS aarch64 = NEON)+ AVX-512 は検出時のみ実行
+  (ランナー非保証のため。VNNI 符号補正はポータブルなエミュレーションテストで常時検証)。
+  未対応 CPU ではスカラーフォールバック
+- [ ] 1対多バッチスコア API(グラフ探索のホットパス)+ prefetch フック
 - [ ] proptest: SIMD 実装とスカラー実装の許容誤差内一致(次元 1..=4096 サンプル)
 
 **完了条件**: criterion ベンチが CI 記録として残り、`#[inline(never)]` + 自動ベクトル化を
@@ -209,7 +218,7 @@ u32 の `RoaringBitmap` との取り違えに注意し、`u32::MAX` 境界のテ
 ### M2 — Flat インデックス + 検索コントラクト(最小の動くもの)
 
 - [ ] **`SearchRequest` を先に確定**(以後のマイルストーンはバリアント追加のみで拡張):
-  - topk / 任意の radius(距離閾値。topk と併用時は「閾値内から topk 件」)/
+  - topk / 任意の radius(スコア閾値。topk と併用時は「閾値内から topk 件」)/
     exact(linear 強制)フラグ / refine 倍率(exact 指定時は refine 無効、優先順位を文書化)
   - インデックス種別毎の typed パラメータ enum(ef, nprobe, beam width, …)
   - `Filter { allow: Option<RoaringTreemap>, predicate: Option<Arc<dyn Fn(DocId) -> bool + Send + Sync>>, selectivity_hint: Option<f32> }`
@@ -217,7 +226,9 @@ u32 の `RoaringBitmap` との取り違えに注意し、`u32::MAX` 境界のテ
       各インデックス実装の責務(境界で変換)。allow / predicate / 削除 bitmap は
       **論理積(AND)** で合成
   - 結果コレクタ: セグメント毎にローカルコレクタを生成するファクトリ + 決定的マージ
-    (通常 topk ヒープ / group-by コレクタを差し替え可能に)
+    (通常 topk ヒープ / group-by コレクタを差し替え可能に)。非有限スコア
+    (±inf / NaN。有限入力でも f32 累積で発生しうる — ADR 0002 の数値エンベロープ)の
+    順序付け規則をコレクタ契約で定義する
   - `SearchRequest: Send + Sync` を static assert(セグメント並列実行の前提)
 - [ ] **フィルタの意味論を確定**: フィルタで除外される doc はグラフ遍歴では通過可能・結果
   には不採用(「遍歴可・結果不可」)。この極性と契約を trait doc に明記
@@ -290,6 +301,8 @@ u32 の `RoaringBitmap` との取り違えに注意し、`u32::MAX` 境界のテ
 - [ ] `Collection`: create / open / insert / upsert / update / delete /
   fetch(pks, `FetchOptions { projection, with_vectors }`) / flush / destroy
   (CRUD 意味論表どおり。セグメント跨ぎ・リプレイ後のテストを含む)
+- [ ] スキーマ/挿入検証で i8 ベクトルフィールドの次元を `MAX_I8_DIMENSION`(32,768)
+  以下に制限する(ADR 0002 のカーネル上限をカーネル panic より手前で強制する)
 - [ ] fd-lock: **ライタのみ**排他ロック(ガードは Collection 生存中保持)。read-only
   オープンはロックなし + ビューのスナップショット分離。ライタ×ライタ排他 /
   リーダ並行動作 / クラッシュ後のロック解放 / destroy を**サブプロセスで**テスト

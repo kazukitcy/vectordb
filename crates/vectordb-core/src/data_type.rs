@@ -84,14 +84,17 @@ impl DataType {
 }
 
 /// The distance or similarity metric used for vector search.
+///
+/// Search scores every metric in a smaller-is-better direction; each variant documents the score
+/// its kernels produce.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum MetricType {
-    /// Euclidean distance.
+    /// Euclidean metric, scored as the squared Euclidean distance (no square root).
     L2,
-    /// Inner-product similarity.
+    /// Inner-product similarity, scored as the negated dot product.
     InnerProduct,
-    /// Cosine similarity.
+    /// Cosine similarity, scored as the negated dot product of pre-normalized vectors.
     Cosine,
 }
 

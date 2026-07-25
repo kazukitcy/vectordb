@@ -13,3 +13,6 @@ or remove entries whenever a naming decision accepts or rejects a synonym.
 | `pk` | The implicit string primary key; never a declarable field | "id": `DocId` is the internal u64, `pk` the user-facing key |
 | `DocId` | Internal u64 identifier, allocated monotonically, never reused | conflating with `pk` |
 | flush / durable commit | `flush()` completion is the only durability point; a successful write is not yet durable | "commit" for a mere WAL append |
+| score | Smaller-is-better f32 kernel output (squared L2, negated dot); canonical in kernel API names | "distance" for negated-dot output: it is not a metric — reserve "distance" for prose about true metrics |
+| kernel path | The instruction-set path a score kernel executes on (`KernelPath`) | "backend", "ISA level" |
+| prefetch | Best-effort cache hint that a vector will be scored soon; may be a no-op | "preload": implies a guaranteed fetch |
