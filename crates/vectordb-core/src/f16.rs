@@ -31,7 +31,7 @@ impl F16 {
     }
 
     /// Returns whether this value is neither infinite nor NaN.
-    pub fn is_finite(self) -> bool {
+    pub const fn is_finite(self) -> bool {
         self.0.is_finite()
     }
 }
