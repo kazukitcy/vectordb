@@ -67,8 +67,10 @@ jobs:
         env:
           RUSTFLAGS: -Zsanitizer=${{ matrix.sanitizer }}
           RUSTDOCFLAGS: -Zsanitizer=${{ matrix.sanitizer }}
+        # Benches are excluded from sanitizer builds: criterion under -Zbuild-std doubles the build
+        # for no test value; bench code paths are covered by the test targets.
         run: >-
-          cargo +nightly test --workspace --all-targets -Zbuild-std
+          cargo +nightly test --workspace --tests -Zbuild-std
           --target x86_64-unknown-linux-gnu
 
   miri-codecs:

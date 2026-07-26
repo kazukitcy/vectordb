@@ -17,7 +17,9 @@ rust-version = "1.93.1"
 publish = false
 
 [workspace.dependencies]
+criterion = { version = "0.7", default-features = false, features = ["cargo_bench_support"] }
 half = "2"
+proptest = "1"
 thiserror = "2"
 vectordb-core = { path = "crates/vectordb-core", version = "=0.0.0" }
 vectordb-index = { path = "crates/vectordb-index", version = "=0.0.0" }

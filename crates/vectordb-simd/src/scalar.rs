@@ -52,13 +52,15 @@ pub(crate) fn squared_l2_i8(a: &[i8], b: &[i8]) -> f32 {
 
 // Length and dimension checks live at the public chokepoint.
 // The final conversion has the rounding behavior specified by ADR 0002.
+// Negation happens after the conversion so that an exactly cancelled sum
+// yields -0.0, matching the float kernels' negate-after-reduction contract.
 #[allow(clippy::cast_precision_loss)]
 pub(crate) fn neg_dot_i8(a: &[i8], b: &[i8]) -> f32 {
     let mut sum = 0i32;
     for index in 0..a.len() {
         sum += i32::from(a[index]) * i32::from(b[index]);
     }
-    (-sum) as f32
+    -(sum as f32)
 }
 
 #[cfg(test)]
@@ -109,5 +111,13 @@ mod tests {
     fn zero_dimension_yields_signed_additive_identity() {
         assert_eq!(super::squared_l2_f32(&[], &[]).to_bits(), 0.0f32.to_bits());
         assert_eq!(super::neg_dot_f32(&[], &[]).to_bits(), (-0.0f32).to_bits());
+    }
+
+    #[test]
+    fn neg_dot_i8_cancellation_yields_negative_zero() {
+        assert_eq!(
+            super::neg_dot_i8(&[1, 1], &[1, -1]).to_bits(),
+            (-0.0f32).to_bits()
+        );
     }
 }
