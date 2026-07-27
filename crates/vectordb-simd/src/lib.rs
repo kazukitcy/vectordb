@@ -12,6 +12,8 @@
 //! non-finite when intermediate sums exceed the `f32` range, even if every
 //! input component is finite.
 
+#[cfg(target_arch = "aarch64")]
+mod aarch64;
 mod scalar;
 #[cfg(target_arch = "x86_64")]
 mod x86;
@@ -86,6 +88,12 @@ mod sealed {
             self
         }
 
+        #[cfg(target_arch = "aarch64")]
+        const fn with_neon(mut self, kernel: KernelFn<T>) -> Self {
+            self.neon = Some(kernel);
+            self
+        }
+
         pub(super) const fn implemented_paths(&self) -> ImplementedPaths {
             ImplementedPaths {
                 scalar: true,
@@ -152,6 +160,12 @@ mod sealed {
                 super::x86::squared_l2_f32_avx512,
                 super::x86::neg_dot_f32_avx512,
             ));
+            #[cfg(target_arch = "aarch64")]
+            let table = table.with_neon(metric_kernel(
+                metric,
+                super::aarch64::squared_l2_f32,
+                super::aarch64::neg_dot_f32,
+            ));
             table
         }
     }
@@ -173,6 +187,12 @@ mod sealed {
                 super::x86::squared_l2_f16_avx512,
                 super::x86::neg_dot_f16_avx512,
             ));
+            #[cfg(target_arch = "aarch64")]
+            let table = table.with_neon(metric_kernel(
+                metric,
+                super::aarch64::squared_l2_f16,
+                super::aarch64::neg_dot_f16,
+            ));
             table
         }
     }
@@ -193,6 +213,12 @@ mod sealed {
                 metric,
                 super::x86::squared_l2_i8_avx512,
                 super::x86::neg_dot_i8_avx512,
+            ));
+            #[cfg(target_arch = "aarch64")]
+            let table = table.with_neon(metric_kernel(
+                metric,
+                super::aarch64::squared_l2_i8,
+                super::aarch64::neg_dot_i8,
             ));
             table
         }
@@ -355,7 +381,12 @@ impl<T: Element> ScoreKernel<T> {
             x86::prefetch(target);
         }
 
-        #[cfg(not(target_arch = "x86_64"))]
+        #[cfg(target_arch = "aarch64")]
+        if self.path == KernelPath::Neon {
+            aarch64::prefetch(target);
+        }
+
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         let _ = target;
     }
 
