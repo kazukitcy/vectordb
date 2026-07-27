@@ -425,6 +425,7 @@ impl<T: Element> ScoreKernel<T> {
             &detected_features(),
             &implemented,
             T::KIND,
+            metric,
             requested,
         )?;
         let Some(kernel) = table.kernel(path) else {
@@ -524,6 +525,7 @@ pub(crate) fn resolve_path(
     features: &FeatureSet,
     implemented: &ImplementedPaths,
     element: ElementKind,
+    metric: MetricType,
     requested: Option<KernelPath>,
 ) -> Result<KernelPath> {
     let supported = |path| match path {
@@ -545,7 +547,13 @@ pub(crate) fn resolve_path(
                 && match element {
                     ElementKind::F32 => true,
                     ElementKind::F16 => features.f16c,
-                    ElementKind::I8 => features.avx512bw && features.avx512vnni,
+                    // VNNI backs only the dot-product kernel; squared L2 widens
+                    // with BW instructions. Unknown future metrics take the
+                    // stricter requirement.
+                    ElementKind::I8 => {
+                        features.avx512bw
+                            && (matches!(metric, MetricType::L2) || features.avx512vnni)
+                    }
                 }
         }
         KernelPath::Neon => arch == Arch::Aarch64 && implemented.neon && features.neon,
@@ -616,8 +624,30 @@ fn detected_features() -> FeatureSet {
 
 #[cfg(test)]
 mod tests {
-    use super::{Arch, ElementKind, FeatureSet, ImplementedPaths, KernelPath, resolve_path};
+    use super::{
+        Arch, ElementKind, FeatureSet, ImplementedPaths, KernelPath, MetricType, resolve_path,
+    };
     use vectordb_core::Error;
+
+    // Most resolver rules are metric-independent; L2 stands in for those tests.
+    // The reference signature mirrors resolve_path's.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    fn resolve_l2(
+        arch: Arch,
+        features: &FeatureSet,
+        implemented: &ImplementedPaths,
+        element: ElementKind,
+        requested: Option<KernelPath>,
+    ) -> vectordb_core::Result<KernelPath> {
+        resolve_path(
+            arch,
+            features,
+            implemented,
+            element,
+            MetricType::L2,
+            requested,
+        )
+    }
 
     fn full_features() -> FeatureSet {
         FeatureSet {
@@ -662,11 +692,11 @@ mod tests {
 
         for element in [ElementKind::F32, ElementKind::F16, ElementKind::I8] {
             assert_eq!(
-                resolve_path(Arch::X86_64, &features, &implemented, element, None).unwrap(),
+                resolve_l2(Arch::X86_64, &features, &implemented, element, None).unwrap(),
                 KernelPath::Avx512
             );
             assert_eq!(
-                resolve_path(Arch::Aarch64, &features, &implemented, element, None).unwrap(),
+                resolve_l2(Arch::Aarch64, &features, &implemented, element, None).unwrap(),
                 KernelPath::Neon
             );
         }
@@ -682,7 +712,7 @@ mod tests {
         let implemented = full_paths();
 
         for element in [ElementKind::F32, ElementKind::F16] {
-            assert_unsupported(resolve_path(
+            assert_unsupported(resolve_l2(
                 Arch::X86_64,
                 &features,
                 &implemented,
@@ -691,7 +721,7 @@ mod tests {
             ));
         }
         assert_eq!(
-            resolve_path(
+            resolve_l2(
                 Arch::X86_64,
                 &features,
                 &implemented,
@@ -713,7 +743,7 @@ mod tests {
         let implemented = full_paths();
 
         assert_eq!(
-            resolve_path(
+            resolve_l2(
                 Arch::X86_64,
                 &features,
                 &implemented,
@@ -723,7 +753,7 @@ mod tests {
             .unwrap(),
             KernelPath::Avx2
         );
-        assert_unsupported(resolve_path(
+        assert_unsupported(resolve_l2(
             Arch::X86_64,
             &features,
             &implemented,
@@ -731,7 +761,7 @@ mod tests {
             Some(KernelPath::Avx2),
         ));
         assert_eq!(
-            resolve_path(
+            resolve_l2(
                 Arch::X86_64,
                 &features,
                 &implemented,
@@ -760,7 +790,7 @@ mod tests {
         let implemented = full_paths();
 
         assert_eq!(
-            resolve_path(
+            resolve_l2(
                 Arch::X86_64,
                 &without_f16c,
                 &implemented,
@@ -770,28 +800,65 @@ mod tests {
             .unwrap(),
             KernelPath::Avx512
         );
-        assert_unsupported(resolve_path(
+        assert_unsupported(resolve_l2(
             Arch::X86_64,
             &without_f16c,
             &implemented,
             ElementKind::F16,
             Some(KernelPath::Avx512),
         ));
-        for features in [&without_bw, &without_vnni] {
+        // Missing BW disqualifies every i8 AVX-512 kernel regardless of metric.
+        for metric in [MetricType::L2, MetricType::InnerProduct] {
             assert_unsupported(resolve_path(
                 Arch::X86_64,
-                features,
+                &without_bw,
                 &implemented,
                 ElementKind::I8,
+                metric,
                 Some(KernelPath::Avx512),
             ));
         }
+        // Missing VNNI disqualifies only the dot-metric i8 kernel; squared L2
+        // widens with BW instructions and stays on AVX-512.
         assert_eq!(
             resolve_path(
                 Arch::X86_64,
                 &without_vnni,
                 &implemented,
                 ElementKind::I8,
+                MetricType::L2,
+                Some(KernelPath::Avx512),
+            )
+            .unwrap(),
+            KernelPath::Avx512
+        );
+        assert_unsupported(resolve_path(
+            Arch::X86_64,
+            &without_vnni,
+            &implemented,
+            ElementKind::I8,
+            MetricType::InnerProduct,
+            Some(KernelPath::Avx512),
+        ));
+        assert_eq!(
+            resolve_path(
+                Arch::X86_64,
+                &without_vnni,
+                &implemented,
+                ElementKind::I8,
+                MetricType::L2,
+                None,
+            )
+            .unwrap(),
+            KernelPath::Avx512
+        );
+        assert_eq!(
+            resolve_path(
+                Arch::X86_64,
+                &without_vnni,
+                &implemented,
+                ElementKind::I8,
+                MetricType::InnerProduct,
                 None,
             )
             .unwrap(),
@@ -807,7 +874,7 @@ mod tests {
         for arch in [Arch::X86_64, Arch::Aarch64] {
             for element in [ElementKind::F32, ElementKind::F16, ElementKind::I8] {
                 assert_eq!(
-                    resolve_path(arch, &features, &implemented, element, None).unwrap(),
+                    resolve_l2(arch, &features, &implemented, element, None).unwrap(),
                     KernelPath::Scalar
                 );
             }
@@ -822,11 +889,11 @@ mod tests {
         for arch in [Arch::X86_64, Arch::Aarch64] {
             for element in [ElementKind::F32, ElementKind::F16, ElementKind::I8] {
                 assert_eq!(
-                    resolve_path(arch, &features, &implemented, element, None).unwrap(),
+                    resolve_l2(arch, &features, &implemented, element, None).unwrap(),
                     KernelPath::Scalar
                 );
                 for path in [KernelPath::Avx2, KernelPath::Avx512, KernelPath::Neon] {
-                    assert_unsupported(resolve_path(
+                    assert_unsupported(resolve_l2(
                         arch,
                         &features,
                         &implemented,
@@ -844,7 +911,7 @@ mod tests {
         let implemented = full_paths();
 
         for element in [ElementKind::F32, ElementKind::F16, ElementKind::I8] {
-            assert_unsupported(resolve_path(
+            assert_unsupported(resolve_l2(
                 Arch::X86_64,
                 &features,
                 &implemented,
@@ -852,7 +919,7 @@ mod tests {
                 Some(KernelPath::Neon),
             ));
             for path in [KernelPath::Avx2, KernelPath::Avx512] {
-                assert_unsupported(resolve_path(
+                assert_unsupported(resolve_l2(
                     Arch::Aarch64,
                     &features,
                     &implemented,
@@ -870,11 +937,11 @@ mod tests {
 
         for element in [ElementKind::F32, ElementKind::F16, ElementKind::I8] {
             assert_eq!(
-                resolve_path(Arch::Other, &features, &implemented, element, None).unwrap(),
+                resolve_l2(Arch::Other, &features, &implemented, element, None).unwrap(),
                 KernelPath::Scalar
             );
             for path in [KernelPath::Avx2, KernelPath::Avx512, KernelPath::Neon] {
-                assert_unsupported(resolve_path(
+                assert_unsupported(resolve_l2(
                     Arch::Other,
                     &features,
                     &implemented,

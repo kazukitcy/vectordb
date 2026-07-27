@@ -723,9 +723,11 @@ pub(crate) unsafe fn neg_dot_f16_avx512(a: &[F16], b: &[F16]) -> f32 {
 }
 
 // Safety preconditions: the caller guarantees equal lengths, a length no greater than
-// MAX_I8_DIMENSION, and that the CPU supports AVX-512F, AVX-512BW, and AVX-512VNNI.
+// MAX_I8_DIMENSION, and that the CPU supports AVX-512F and AVX-512BW.
+// No VNNI instruction is used: the widening multiply-add needs only F+BW, so this
+// kernel stays available on AVX-512 hardware without VNNI.
 #[allow(clippy::cast_precision_loss, clippy::cast_ptr_alignment)]
-#[target_feature(enable = "avx512f,avx512bw,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw")]
 pub(crate) unsafe fn squared_l2_i8_avx512(a: &[i8], b: &[i8]) -> f32 {
     let mut first_accumulator = _mm512_setzero_si512();
     let mut second_accumulator = _mm512_setzero_si512();
