@@ -8,6 +8,10 @@
 //! | [`MetricType::InnerProduct`] | Negated dot product |
 //! | [`MetricType::Cosine`] | Negated dot product over pre-normalized inputs |
 //!
+//! For `i8`, cosine is the raw negated integer dot over vectors quantized from
+//! unit-normalized `f32` vectors; quantization defines the end-to-end scale,
+//! bias, and correction semantics in M6.
+//!
 //! Floating-point kernels accumulate in `f32`. Their scores may therefore be
 //! non-finite when intermediate sums exceed the `f32` range, even if every
 //! input component is finite.
@@ -270,6 +274,10 @@ impl<T: Element> ScoreKernel<T> {
     ///
     /// Returns [`Error::Unsupported`] when the current CPU or target
     /// architecture does not support `path` for `T`.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a [`MetricType`] variant unknown to this crate version.
     pub fn with_path(metric: MetricType, path: KernelPath) -> Result<Self> {
         Self::construct(metric, Some(path))
     }
@@ -287,13 +295,13 @@ impl<T: Element> ScoreKernel<T> {
     /// Computes the score between two vectors of equal dimension.
     ///
     /// Floating-point inputs may produce a non-finite score when intermediate
-    /// sums exceed the `f32` range.
+    /// sums exceed the `f32` range. Zero-dimension inputs yield `0.0` for
+    /// squared L2 and `-0.0` for negated dot.
     ///
     /// # Panics
     ///
     /// Panics if the vector lengths differ, or if an `i8` vector exceeds
-    /// [`MAX_I8_DIMENSION`]. Zero-dimension inputs yield `0.0` for squared L2
-    /// and `-0.0` for negated dot.
+    /// [`MAX_I8_DIMENSION`].
     pub fn score(&self, a: &[T], b: &[T]) -> f32 {
         assert!(
             a.len() == b.len(),
@@ -307,7 +315,9 @@ impl<T: Element> ScoreKernel<T> {
 
     /// Scores `query` against each target slice.
     ///
-    /// The entire batch is validated before any output is written.
+    /// The entire batch is validated before any output is written. Before
+    /// scoring a target, this method may issue best-effort prefetch hints for
+    /// up to the first 256 bytes of that target.
     ///
     /// # Panics
     ///
@@ -333,7 +343,7 @@ impl<T: Element> ScoreKernel<T> {
 
         for (index, target) in targets.iter().enumerate() {
             if index + 1 < targets.len() {
-                self.prefetch(targets[index + 1]);
+                self.prefetch_start(targets[index + 1]);
             }
             out[index] = self.invoke(query, target);
         }
@@ -341,7 +351,8 @@ impl<T: Element> ScoreKernel<T> {
 
     /// Scores `query` against row-major contiguous vectors.
     ///
-    /// The number of rows is `out.len()`.
+    /// The number of rows is `out.len()`. This method does not issue software
+    /// prefetch hints.
     ///
     /// # Panics
     ///
@@ -365,13 +376,11 @@ impl<T: Element> ScoreKernel<T> {
         );
 
         let dimension = query.len();
-        for index in 0..out.len() {
-            if index + 1 < out.len() {
-                let next_start = (index + 1) * dimension;
-                self.prefetch(&vectors[next_start..next_start + dimension]);
-            }
+        // Sequential rows are covered by hardware stride prefetchers; automatic
+        // full-row prefetch measured 1.29x slower at dimension 1536.
+        for (index, score) in out.iter_mut().enumerate() {
             let start = index * dimension;
-            out[index] = self.invoke(query, &vectors[start..start + dimension]);
+            *score = self.invoke(query, &vectors[start..start + dimension]);
         }
     }
 
@@ -387,6 +396,21 @@ impl<T: Element> ScoreKernel<T> {
         #[cfg(target_arch = "aarch64")]
         if self.path == KernelPath::Neon {
             aarch64::prefetch(target);
+        }
+
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        let _ = target;
+    }
+
+    fn prefetch_start(&self, target: &[T]) {
+        #[cfg(target_arch = "x86_64")]
+        if matches!(self.path, KernelPath::Avx2 | KernelPath::Avx512) {
+            x86::prefetch_start(target);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if self.path == KernelPath::Neon {
+            aarch64::prefetch_start(target);
         }
 
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -469,6 +493,9 @@ pub fn normalize_l2(vector: &mut [f32]) -> f64 {
 pub(crate) enum Arch {
     X86_64,
     Aarch64,
+    // Supported-target builds exercise this only through synthetic resolver tests.
+    #[allow(dead_code)]
+    Other,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -537,6 +564,7 @@ pub(crate) fn resolve_path(
     let candidates: &[KernelPath] = match arch {
         Arch::X86_64 => &[KernelPath::Avx512, KernelPath::Avx2, KernelPath::Scalar],
         Arch::Aarch64 => &[KernelPath::Neon, KernelPath::Scalar],
+        Arch::Other => &[KernelPath::Scalar],
     };
     candidates
         .iter()
@@ -555,6 +583,11 @@ const fn current_arch() -> Arch {
     Arch::Aarch64
 }
 
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+const fn current_arch() -> Arch {
+    Arch::Other
+}
+
 #[cfg(target_arch = "x86_64")]
 fn detected_features() -> FeatureSet {
     FeatureSet {
@@ -566,6 +599,11 @@ fn detected_features() -> FeatureSet {
         avx512vnni: std::arch::is_x86_feature_detected!("avx512vnni"),
         neon: false,
     }
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn detected_features() -> FeatureSet {
+    FeatureSet::default()
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -816,6 +854,28 @@ mod tests {
             for path in [KernelPath::Avx2, KernelPath::Avx512] {
                 assert_unsupported(resolve_path(
                     Arch::Aarch64,
+                    &features,
+                    &implemented,
+                    element,
+                    Some(path),
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn other_architecture_uses_only_the_scalar_path() {
+        let features = full_features();
+        let implemented = full_paths();
+
+        for element in [ElementKind::F32, ElementKind::F16, ElementKind::I8] {
+            assert_eq!(
+                resolve_path(Arch::Other, &features, &implemented, element, None).unwrap(),
+                KernelPath::Scalar
+            );
+            for path in [KernelPath::Avx2, KernelPath::Avx512, KernelPath::Neon] {
+                assert_unsupported(resolve_path(
+                    Arch::Other,
                     &features,
                     &implemented,
                     element,

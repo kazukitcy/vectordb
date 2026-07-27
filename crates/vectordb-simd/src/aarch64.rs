@@ -21,14 +21,24 @@ use vectordb_core::F16;
 // paired accumulators). The final reductions are bounded by 32_768 * 65_025 = 2_130_739_200 for
 // squared L2 and 32_768 * 16_384 = 536_870_912 for dot, so every i32 operation remains in range.
 //
-// Prefetch walks the target in 64-byte cache-line-sized steps and requests temporal L1 retention.
-// ScoreKernel dispatches it only for the Neon path; scalar-path prefetch remains a no-op.
+// Full-vector prefetch walks the target in 64-byte cache-line-sized steps; batch scoring bounds
+// its automatic hint to the first four lines. Both request temporal L1 retention. ScoreKernel
+// dispatches them only for the Neon path; scalar-path prefetch remains a no-op.
 const CACHE_LINE_BYTES: usize = 64;
+const PREFETCH_START_BYTES: usize = 4 * CACHE_LINE_BYTES;
 const F16_CHUNK_ELEMENTS: usize = 64;
 
 pub(crate) fn prefetch<T>(target: &[T]) {
+    prefetch_bytes(target, size_of_val(target));
+}
+
+pub(crate) fn prefetch_start<T>(target: &[T]) {
+    prefetch_bytes(target, size_of_val(target).min(PREFETCH_START_BYTES));
+}
+
+fn prefetch_bytes<T>(target: &[T], byte_len: usize) {
     let start = target.as_ptr().cast::<u8>();
-    for offset in (0..size_of_val(target)).step_by(CACHE_LINE_BYTES) {
+    for offset in (0..byte_len).step_by(CACHE_LINE_BYTES) {
         let address = start.wrapping_add(offset);
         unsafe {
             // SAFETY: every offset is strictly below the slice's byte length, so the address is

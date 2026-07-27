@@ -2,7 +2,8 @@
 #![allow(clippy::should_panic_without_expect)] // panic occurrence is the contract under test
 
 use vectordb_simd::{
-    Error, F16, KernelPath, MAX_I8_DIMENSION, MetricType, ScoreKernel, l2_norm, normalize_l2,
+    Element, Error, F16, KernelPath, MAX_I8_DIMENSION, MetricType, ScoreKernel, l2_norm,
+    normalize_l2,
 };
 
 #[test]
@@ -139,6 +140,17 @@ fn batch_validation_precedes_any_output_write() {
 }
 
 #[test]
+fn output_count_validation_precedes_any_output_write() {
+    let kernel = ScoreKernel::<f32>::new(MetricType::L2);
+    let mut out = [f32::NAN; 2];
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        kernel.score_many(&[1.0], &[&[1.0]], &mut out);
+    }));
+    assert!(result.is_err());
+    assert!(out.iter().all(|value| value.is_nan()));
+}
+
+#[test]
 fn score_contiguous_scores_row_major_vectors() {
     let kernel = ScoreKernel::<f32>::new(MetricType::InnerProduct);
     let mut out = [0.0f32; 2];
@@ -196,4 +208,24 @@ fn kernels_are_send_sync_copy() {
     assert_bounds::<ScoreKernel<f32>>();
     assert_bounds::<ScoreKernel<F16>>();
     assert_bounds::<ScoreKernel<i8>>();
+}
+
+fn assert_cosine_matches_inner_product<T: Element>(a: &[T], b: &[T]) {
+    let cosine = ScoreKernel::<T>::new(MetricType::Cosine);
+    let inner_product = ScoreKernel::<T>::new(MetricType::InnerProduct);
+    assert_eq!(cosine.path(), inner_product.path());
+    assert_eq!(
+        cosine.score(a, b).to_bits(),
+        inner_product.score(a, b).to_bits()
+    );
+}
+
+#[test]
+fn cosine_and_inner_product_share_score_kernels() {
+    assert_cosine_matches_inner_product(&[1.0f32, -2.0, 3.0], &[-4.0, 5.0, 6.0]);
+    assert_cosine_matches_inner_product(
+        &[F16::from_f32(1.0), F16::from_f32(-2.0), F16::from_f32(3.0)],
+        &[F16::from_f32(-4.0), F16::from_f32(5.0), F16::from_f32(6.0)],
+    );
+    assert_cosine_matches_inner_product(&[1i8, -2, 3], &[-4, 5, 6]);
 }

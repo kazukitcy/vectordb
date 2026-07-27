@@ -5,7 +5,7 @@
 
 ## Context
 
-The distance kernels in `vectordb-simd` feed every vector index that later
+The score kernels in `vectordb-simd` feed every vector index that later
 milestones build (Flat, HNSW, IVF, graph). Search collects candidates through
 heap-based top-k merging, and every consumer must agree on which direction is
 "better" for every metric. The kernels are also the first of the three audited

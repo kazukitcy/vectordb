@@ -72,15 +72,24 @@ jobs:
         with:
           key: bench-${{ matrix.target }}
       - name: Test benchmark internals
+        env:
+          VECTORDB_SIMD_REQUIRE: ${{ matrix.simd_require }}
         run: >-
           cargo test -p vectordb-simd --features bench-internals
           --target ${{ matrix.target }}
+      - name: Lint benchmark internals
+        run: >-
+          cargo clippy -p vectordb-simd --all-targets
+          --features bench-internals --target ${{ matrix.target }}
+          -- -D warnings
       - name: Record criterion benchmarks
         shell: bash
         run: >-
           cargo bench -p vectordb-simd --features bench-internals
           --target ${{ matrix.target }} -- --noplot | tee bench.log
       - name: Record speedup report
+        env:
+          VECTORDB_SIMD_REQUIRE: ${{ matrix.simd_require }}
         shell: bash
         run: >-
           cargo test -p vectordb-simd --release --features bench-internals

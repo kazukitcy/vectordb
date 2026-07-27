@@ -12,7 +12,7 @@ const PATHS: [KernelPath; 4] = [
     KernelPath::Avx512,
     KernelPath::Neon,
 ];
-const METRICS: [MetricType; 3] = [MetricType::L2, MetricType::InnerProduct, MetricType::Cosine];
+const SCORE_METRICS: [MetricType; 2] = [MetricType::L2, MetricType::InnerProduct];
 
 type BaselineFn<T> = fn(&[T], &[T]) -> f32;
 
@@ -94,7 +94,7 @@ fn bench_single<T: Element>(
     squared_l2: BaselineFn<T>,
     neg_dot: BaselineFn<T>,
 ) {
-    for metric in METRICS {
+    for metric in SCORE_METRICS {
         let mut group =
             criterion.benchmark_group(format!("{element}/{}/single", metric_name(metric)));
         let baseline_fn = baseline_for(metric, squared_l2, neg_dot);
@@ -136,7 +136,7 @@ fn bench_batch<T: Element>(
     squared_l2: BaselineFn<T>,
     neg_dot: BaselineFn<T>,
 ) {
-    for metric in METRICS {
+    for metric in SCORE_METRICS {
         let mut group =
             criterion.benchmark_group(format!("{element}/{}/contiguous", metric_name(metric)));
         let baseline_fn = baseline_for(metric, squared_l2, neg_dot);
@@ -144,7 +144,7 @@ fn bench_batch<T: Element>(
         for dimension in DIMENSIONS {
             let query = make_values(dimension, 3);
             let vectors = make_values(dimension * BATCH_SIZE, 11);
-            group.throughput(Throughput::Elements(dimension as u64));
+            group.throughput(Throughput::Elements((dimension * BATCH_SIZE) as u64));
             group.bench_function(BenchmarkId::new("baseline", dimension), |bencher| {
                 let mut out = vec![0.0; BATCH_SIZE];
                 bencher.iter(|| {
@@ -177,7 +177,7 @@ fn bench_batch<T: Element>(
     }
 }
 
-fn distance(criterion: &mut Criterion) {
+fn score_kernels(criterion: &mut Criterion) {
     bench_single(
         criterion,
         "f32",
@@ -228,6 +228,6 @@ criterion_group! {
         .warm_up_time(Duration::from_millis(100))
         .measurement_time(Duration::from_millis(200))
         .sample_size(10);
-    targets = distance
+    targets = score_kernels
 }
 criterion_main!(benches);

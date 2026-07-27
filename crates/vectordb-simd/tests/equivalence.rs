@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use proptest::prelude::*;
 use proptest::test_runner::{Config as ProptestConfig, TestCaseError, TestRunner};
-use vectordb_simd::{F16, KernelPath, MetricType, ScoreKernel};
+use vectordb_simd::{Element, F16, KernelPath, MAX_I8_DIMENSION, MetricType, ScoreKernel};
 
 const ALL_PATHS: [KernelPath; 4] = [
     KernelPath::Scalar,
@@ -13,7 +13,8 @@ const ALL_PATHS: [KernelPath; 4] = [
     KernelPath::Avx512,
     KernelPath::Neon,
 ];
-const METRICS: [MetricType; 3] = [MetricType::L2, MetricType::InnerProduct, MetricType::Cosine];
+const SCORE_METRICS: [MetricType; 2] = [MetricType::L2, MetricType::InnerProduct];
+const BATCH_DIMENSIONS: [usize; 5] = [1, 63, 64, 65, 4095];
 const FIXED_DIMENSIONS: [usize; 21] = [
     1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 4095, 4096,
 ];
@@ -63,16 +64,37 @@ fn vnni_bias_identity_sides(query: &[i8], target: &[i8]) -> (i32, i32) {
     (dot, dpbusd_total - 128 * target_sum)
 }
 
-struct PathRun {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TestElement {
+    F32,
+    F16,
+    I8,
+}
+
+impl TestElement {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::F32 => "f32",
+            Self::F16 => "f16",
+            Self::I8 => "i8",
+        }
+    }
+}
+
+struct CombinationRun {
     path: KernelPath,
+    element: TestElement,
+    metric: MetricType,
     oracle_a_cases: Cell<usize>,
     oracle_b_cases: Cell<usize>,
 }
 
-impl PathRun {
-    const fn new(path: KernelPath) -> Self {
+impl CombinationRun {
+    const fn new(path: KernelPath, element: TestElement, metric: MetricType) -> Self {
         Self {
             path,
+            element,
+            metric,
             oracle_a_cases: Cell::new(0),
             oracle_b_cases: Cell::new(0),
         }
@@ -107,41 +129,61 @@ fn required_paths() -> HashSet<KernelPath> {
         .collect()
 }
 
-fn construction_failures(path: KernelPath) -> Vec<String> {
-    let mut failures = Vec::new();
-    for metric in METRICS {
-        if let Err(error) = ScoreKernel::<f32>::with_path(metric, path) {
-            failures.push(format!("f32/{metric:?}: {error}"));
-        }
-        if let Err(error) = ScoreKernel::<F16>::with_path(metric, path) {
-            failures.push(format!("f16/{metric:?}: {error}"));
-        }
-        if let Err(error) = ScoreKernel::<i8>::with_path(metric, path) {
-            failures.push(format!("i8/{metric:?}: {error}"));
-        }
-    }
-    failures
+fn construction_error(
+    path: KernelPath,
+    element: TestElement,
+    metric: MetricType,
+) -> Option<String> {
+    let result = match element {
+        TestElement::F32 => ScoreKernel::<f32>::with_path(metric, path).map(|_| ()),
+        TestElement::F16 => ScoreKernel::<F16>::with_path(metric, path).map(|_| ()),
+        TestElement::I8 => ScoreKernel::<i8>::with_path(metric, path).map(|_| ()),
+    };
+    result.err().map(|error| error.to_string())
 }
 
-fn constructible_paths() -> Vec<PathRun> {
+fn constructible_combinations() -> Vec<CombinationRun> {
     let required = required_paths();
-    let mut paths = Vec::new();
+    let mut combinations = Vec::new();
+    let mut required_failures = Vec::new();
 
     for path in ALL_PATHS {
-        let failures = construction_failures(path);
-        if failures.is_empty() {
-            paths.push(PathRun::new(path));
-        } else if required.contains(&path) {
-            panic!(
-                "required path {path:?} is unavailable:\n{}",
-                failures.join("\n")
-            );
-        } else {
-            println!("path skipped: {path:?}");
+        for metric in SCORE_METRICS {
+            for element in [TestElement::F32, TestElement::F16, TestElement::I8] {
+                if let Some(error) = construction_error(path, element, metric) {
+                    println!(
+                        "combination skipped: path={path:?} element={} metric={metric:?}: {error}",
+                        element.name()
+                    );
+                    if required.contains(&path) {
+                        required_failures.push(format!(
+                            "path={path:?} element={} metric={metric:?}: {error}",
+                            element.name()
+                        ));
+                    }
+                } else {
+                    combinations.push(CombinationRun::new(path, element, metric));
+                }
+            }
         }
     }
 
-    paths
+    assert!(
+        required_failures.is_empty(),
+        "required SIMD combinations are unavailable:\n{}",
+        required_failures.join("\n")
+    );
+    combinations
+}
+
+fn matching_combinations(
+    combinations: &[CombinationRun],
+    element: TestElement,
+    metric: MetricType,
+) -> impl Iterator<Item = &CombinationRun> {
+    combinations
+        .iter()
+        .filter(move |run| run.element == element && run.metric == metric)
 }
 
 fn f64_oracle<T: Copy>(
@@ -238,9 +280,13 @@ fn assert_exact_i8(path: KernelPath, metric: MetricType, a: &[i8], b: &[i8]) -> 
     exact_bits(path, "i8", metric, got, scalar, expected)
 }
 
-fn tolerance(metric: MetricType, a_len: usize, term_magnitudes: f64) -> f64 {
+fn tolerance(a_len: usize, term_magnitudes: f64) -> f64 {
     let dimension = f64::from(u32::try_from(a_len).expect("test dimension fits in u32"));
-    let _ = metric;
+    // Sequential f32 summation has worst-case error <= (n-1)*eps*sum|terms|.
+    // The 4x margin covers FMA fusing, tree-reduction reassociation, and the
+    // f16-to-f32 conversion path. The absolute floor covers near-total
+    // cancellation, where the relative bound vanishes but f32 rounding noise
+    // does not; exact lane accounting remains Oracle A's responsibility.
     (4.0 * dimension * EPSILON * term_magnitudes).max(1e-6)
 }
 
@@ -255,7 +301,11 @@ fn within_tolerance(
 ) -> CheckResult {
     let got_error = (f64::from(got) - expected).abs();
     let scalar_error = (f64::from(scalar) - expected).abs();
-    if got_error > allowed || scalar_error > allowed {
+    if !(got_error.is_finite()
+        && got_error <= allowed
+        && scalar_error.is_finite()
+        && scalar_error <= allowed)
+    {
         return Err(format!(
             "{element}/{metric:?}/{path:?}: got={got:?}, scalar={scalar:?}, \
              f64-oracle={expected:?}, got-error={got_error:?}, \
@@ -280,7 +330,7 @@ fn assert_tolerant_f32(path: KernelPath, metric: MetricType, a: &[f32], b: &[f32
         got,
         scalar,
         expected,
-        tolerance(metric, a.len(), term_magnitudes),
+        tolerance(a.len(), term_magnitudes),
     )
 }
 
@@ -299,7 +349,7 @@ fn assert_tolerant_f16(path: KernelPath, metric: MetricType, a: &[F16], b: &[F16
         got,
         scalar,
         expected,
-        tolerance(metric, a.len(), term_magnitudes),
+        tolerance(a.len(), term_magnitudes),
     )
 }
 
@@ -319,7 +369,7 @@ fn with_offsets<T: Copy>(
 }
 
 fn run_oracle_a_case(
-    paths: &[PathRun],
+    combinations: &[CombinationRun],
     grid_a: &[i8],
     grid_b: &[i8],
     i8_a: &[i8],
@@ -331,28 +381,28 @@ fn run_oracle_a_case(
     let f16_b: Vec<F16> = f32_b.iter().copied().map(F16::from_f32).collect();
 
     with_offsets(&f32_a, &f32_b, |a, b| {
-        for path in paths {
-            for metric in METRICS {
-                assert_exact_f32(path.path, metric, a, b)?;
-                path.count_oracle_a();
+        for metric in SCORE_METRICS {
+            for run in matching_combinations(combinations, TestElement::F32, metric) {
+                assert_exact_f32(run.path, metric, a, b)?;
+                run.count_oracle_a();
             }
         }
         Ok(())
     })?;
     with_offsets(&f16_a, &f16_b, |a, b| {
-        for path in paths {
-            for metric in METRICS {
-                assert_exact_f16(path.path, metric, a, b)?;
-                path.count_oracle_a();
+        for metric in SCORE_METRICS {
+            for run in matching_combinations(combinations, TestElement::F16, metric) {
+                assert_exact_f16(run.path, metric, a, b)?;
+                run.count_oracle_a();
             }
         }
         Ok(())
     })?;
     with_offsets(i8_a, i8_b, |a, b| {
-        for path in paths {
-            for metric in METRICS {
-                assert_exact_i8(path.path, metric, a, b)?;
-                path.count_oracle_a();
+        for metric in SCORE_METRICS {
+            for run in matching_combinations(combinations, TestElement::I8, metric) {
+                assert_exact_i8(run.path, metric, a, b)?;
+                run.count_oracle_a();
             }
         }
         Ok(())
@@ -360,7 +410,7 @@ fn run_oracle_a_case(
 }
 
 fn run_oracle_b_case(
-    paths: &[PathRun],
+    combinations: &[CombinationRun],
     f32_a: &[f32],
     f32_b: &[f32],
     i8_a: &[i8],
@@ -370,28 +420,28 @@ fn run_oracle_b_case(
     let f16_b: Vec<F16> = f32_b.iter().copied().map(F16::from_f32).collect();
 
     with_offsets(f32_a, f32_b, |a, b| {
-        for path in paths {
-            for metric in METRICS {
-                assert_tolerant_f32(path.path, metric, a, b)?;
-                path.count_oracle_b();
+        for metric in SCORE_METRICS {
+            for run in matching_combinations(combinations, TestElement::F32, metric) {
+                assert_tolerant_f32(run.path, metric, a, b)?;
+                run.count_oracle_b();
             }
         }
         Ok(())
     })?;
     with_offsets(&f16_a, &f16_b, |a, b| {
-        for path in paths {
-            for metric in METRICS {
-                assert_tolerant_f16(path.path, metric, a, b)?;
-                path.count_oracle_b();
+        for metric in SCORE_METRICS {
+            for run in matching_combinations(combinations, TestElement::F16, metric) {
+                assert_tolerant_f16(run.path, metric, a, b)?;
+                run.count_oracle_b();
             }
         }
         Ok(())
     })?;
     with_offsets(i8_a, i8_b, |a, b| {
-        for path in paths {
-            for metric in METRICS {
-                assert_exact_i8(path.path, metric, a, b)?;
-                path.count_oracle_b();
+        for metric in SCORE_METRICS {
+            for run in matching_combinations(combinations, TestElement::I8, metric) {
+                assert_exact_i8(run.path, metric, a, b)?;
+                run.count_oracle_b();
             }
         }
         Ok(())
@@ -416,10 +466,10 @@ fn fixed_i8(dimension: usize, multiplier: usize, addend: usize) -> Vec<i8> {
         .collect()
 }
 
-fn run_fixed_dimensions(paths: &[PathRun]) {
+fn run_fixed_dimensions(combinations: &[CombinationRun]) {
     for dimension in FIXED_DIMENSIONS {
         run_oracle_a_case(
-            paths,
+            combinations,
             &fixed_grid(dimension, 17, 5),
             &fixed_grid(dimension, 29, 11),
             &fixed_i8(dimension, 73, 19),
@@ -429,48 +479,173 @@ fn run_fixed_dimensions(paths: &[PathRun]) {
     }
 }
 
-fn run_zero_and_cancellation_cases(paths: &[PathRun]) {
+fn run_zero_and_cancellation_cases(combinations: &[CombinationRun]) {
     let zero_f32 = [0.0f32; 17];
     let zero_f16 = [F16::from_f32(0.0); 17];
     let zero_i8 = [0i8; 17];
 
-    for path in paths {
-        for metric in METRICS {
-            assert_exact_f32(path.path, metric, &zero_f32, &zero_f32)
+    for metric in SCORE_METRICS {
+        for run in matching_combinations(combinations, TestElement::F32, metric) {
+            assert_exact_f32(run.path, metric, &zero_f32, &zero_f32)
                 .unwrap_or_else(|error| panic!("{error}"));
-            assert_exact_f16(path.path, metric, &zero_f16, &zero_f16)
-                .unwrap_or_else(|error| panic!("{error}"));
-            assert_exact_i8(path.path, metric, &zero_i8, &zero_i8)
-                .unwrap_or_else(|error| panic!("{error}"));
-            path.count_oracle_a();
-            path.count_oracle_a();
-            path.count_oracle_a();
+            run.count_oracle_a();
         }
-
-        for metric in [MetricType::InnerProduct, MetricType::Cosine] {
-            assert_exact_f32(path.path, metric, &[1.0, 1.0], &[1.0, -1.0])
+        for run in matching_combinations(combinations, TestElement::F16, metric) {
+            assert_exact_f16(run.path, metric, &zero_f16, &zero_f16)
                 .unwrap_or_else(|error| panic!("{error}"));
-            assert_exact_f16(
-                path.path,
-                metric,
-                &[F16::from_f32(1.0), F16::from_f32(1.0)],
-                &[F16::from_f32(1.0), F16::from_f32(-1.0)],
-            )
+            run.count_oracle_a();
+        }
+        for run in matching_combinations(combinations, TestElement::I8, metric) {
+            assert_exact_i8(run.path, metric, &zero_i8, &zero_i8)
+                .unwrap_or_else(|error| panic!("{error}"));
+            run.count_oracle_a();
+        }
+    }
+
+    for run in matching_combinations(combinations, TestElement::F32, MetricType::InnerProduct) {
+        assert_exact_f32(run.path, run.metric, &[1.0, 1.0], &[1.0, -1.0])
             .unwrap_or_else(|error| panic!("{error}"));
-            assert_exact_i8(path.path, metric, &[1, 1], &[1, -1])
-                .unwrap_or_else(|error| panic!("{error}"));
-            path.count_oracle_a();
-            path.count_oracle_a();
-            path.count_oracle_a();
-        }
+        run.count_oracle_a();
+    }
+    for run in matching_combinations(combinations, TestElement::F16, MetricType::InnerProduct) {
+        assert_exact_f16(
+            run.path,
+            run.metric,
+            &[F16::from_f32(1.0), F16::from_f32(1.0)],
+            &[F16::from_f32(1.0), F16::from_f32(-1.0)],
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        run.count_oracle_a();
+    }
+    for run in matching_combinations(combinations, TestElement::I8, MetricType::InnerProduct) {
+        assert_exact_i8(run.path, run.metric, &[1, 1], &[1, -1])
+            .unwrap_or_else(|error| panic!("{error}"));
+        run.count_oracle_a();
+    }
 
-        for metric in METRICS {
-            assert_exact_f32(path.path, metric, &[], &[]).unwrap_or_else(|error| panic!("{error}"));
-            assert_exact_f16(path.path, metric, &[], &[]).unwrap_or_else(|error| panic!("{error}"));
-            assert_exact_i8(path.path, metric, &[], &[]).unwrap_or_else(|error| panic!("{error}"));
-            path.count_oracle_a();
-            path.count_oracle_a();
-            path.count_oracle_a();
+    for metric in SCORE_METRICS {
+        for run in matching_combinations(combinations, TestElement::F32, metric) {
+            assert_exact_f32(run.path, metric, &[], &[]).unwrap_or_else(|error| panic!("{error}"));
+            run.count_oracle_a();
+        }
+        for run in matching_combinations(combinations, TestElement::F16, metric) {
+            assert_exact_f16(run.path, metric, &[], &[]).unwrap_or_else(|error| panic!("{error}"));
+            run.count_oracle_a();
+        }
+        for run in matching_combinations(combinations, TestElement::I8, metric) {
+            assert_exact_i8(run.path, metric, &[], &[]).unwrap_or_else(|error| panic!("{error}"));
+            run.count_oracle_a();
+        }
+    }
+}
+
+fn run_near_zero_exact_cases(combinations: &[CombinationRun]) {
+    let f32_l2_a = [0.0f32];
+    let f32_l2_b = [0.000_976_562_5f32];
+    let f16_l2_a = [F16::from_f32(0.0)];
+    let f16_l2_b = [F16::from_f32(0.000_976_562_5)];
+    let f32_cancel_a = [1.0f32, 1.0, 1.0];
+    let f32_cancel_b = [0.000_976_562_5f32, -0.000_976_562_5, 0.0];
+    let f16_cancel_a = [F16::from_f32(1.0); 3];
+    let f16_cancel_b = [
+        F16::from_f32(0.000_976_562_5),
+        F16::from_f32(-0.000_976_562_5),
+        F16::from_f32(0.0),
+    ];
+
+    for run in matching_combinations(combinations, TestElement::F32, MetricType::L2) {
+        assert_exact_f32(run.path, run.metric, &f32_l2_a, &f32_l2_b)
+            .unwrap_or_else(|error| panic!("{error}"));
+        run.count_oracle_a();
+    }
+    for run in matching_combinations(combinations, TestElement::F16, MetricType::L2) {
+        assert_exact_f16(run.path, run.metric, &f16_l2_a, &f16_l2_b)
+            .unwrap_or_else(|error| panic!("{error}"));
+        run.count_oracle_a();
+    }
+    for run in matching_combinations(combinations, TestElement::F32, MetricType::InnerProduct) {
+        assert_exact_f32(run.path, run.metric, &f32_cancel_a, &f32_cancel_b)
+            .unwrap_or_else(|error| panic!("{error}"));
+        run.count_oracle_a();
+    }
+    for run in matching_combinations(combinations, TestElement::F16, MetricType::InnerProduct) {
+        assert_exact_f16(run.path, run.metric, &f16_cancel_a, &f16_cancel_b)
+            .unwrap_or_else(|error| panic!("{error}"));
+        run.count_oracle_a();
+    }
+}
+
+fn assert_batch_equivalence<T: Element>(run: &CombinationRun, query: &[T], targets: &[Vec<T>]) {
+    let kernel = ScoreKernel::<T>::with_path(run.metric, run.path).expect("constructible path");
+    let target_slices: Vec<&[T]> = targets.iter().map(Vec::as_slice).collect();
+    let mut contiguous = Vec::with_capacity(query.len() * targets.len());
+    for target in targets {
+        contiguous.extend_from_slice(target);
+    }
+    let expected: Vec<f32> = target_slices
+        .iter()
+        .map(|target| kernel.score(query, target))
+        .collect();
+    let mut many = vec![f32::NAN; targets.len()];
+    let mut contiguous_out = vec![f32::NAN; targets.len()];
+    kernel.score_many(query, &target_slices, &mut many);
+    kernel.score_contiguous(query, &contiguous, &mut contiguous_out);
+
+    for (index, ((expected, many), contiguous)) in
+        expected.iter().zip(&many).zip(&contiguous_out).enumerate()
+    {
+        assert_eq!(
+            many.to_bits(),
+            expected.to_bits(),
+            "score_many mismatch: path={:?} element={} metric={:?} dimension={} target={index}",
+            run.path,
+            run.element.name(),
+            run.metric,
+            query.len()
+        );
+        assert_eq!(
+            contiguous.to_bits(),
+            expected.to_bits(),
+            "score_contiguous mismatch: path={:?} element={} metric={:?} dimension={} target={index}",
+            run.path,
+            run.element.name(),
+            run.metric,
+            query.len()
+        );
+    }
+}
+
+fn run_batch_equivalence(combinations: &[CombinationRun]) {
+    for dimension in BATCH_DIMENSIONS {
+        let query_grid = fixed_grid(dimension, 17, 5);
+        let target_grids = [
+            fixed_grid(dimension, 29, 11),
+            fixed_grid(dimension, 13, 7),
+            fixed_grid(dimension, 31, 3),
+        ];
+        let query_f32: Vec<f32> = query_grid.iter().copied().map(f32::from).collect();
+        let targets_f32: Vec<Vec<f32>> = target_grids
+            .iter()
+            .map(|target| target.iter().copied().map(f32::from).collect())
+            .collect();
+        let query_f16: Vec<F16> = query_f32.iter().copied().map(F16::from_f32).collect();
+        let targets_f16: Vec<Vec<F16>> = targets_f32
+            .iter()
+            .map(|target| target.iter().copied().map(F16::from_f32).collect())
+            .collect();
+        let query_i8 = fixed_i8(dimension, 73, 19);
+        let targets_i8 = vec![
+            fixed_i8(dimension, 151, 47),
+            fixed_i8(dimension, 109, 23),
+            fixed_i8(dimension, 193, 61),
+        ];
+
+        for run in combinations {
+            match run.element {
+                TestElement::F32 => assert_batch_equivalence(run, &query_f32, &targets_f32),
+                TestElement::F16 => assert_batch_equivalence(run, &query_f16, &targets_f16),
+                TestElement::I8 => assert_batch_equivalence(run, &query_i8, &targets_i8),
+            }
         }
     }
 }
@@ -524,20 +699,45 @@ fn i8_neg_dot_pair(score: u32) -> (Vec<i8>, Vec<i8>) {
     (a, b)
 }
 
-fn run_i8_conversion_boundaries(paths: &[PathRun]) {
+fn run_i8_conversion_boundaries(combinations: &[CombinationRun]) {
     for score in [(1_u32 << 24) - 1, 1_u32 << 24, (1_u32 << 24) + 1] {
         let (l2_a, l2_b) = i8_l2_pair(score);
         let (dot_a, dot_b) = i8_neg_dot_pair(score);
-        for path in paths {
-            assert_exact_i8(path.path, MetricType::L2, &l2_a, &l2_b)
+        for run in matching_combinations(combinations, TestElement::I8, MetricType::L2) {
+            assert_exact_i8(run.path, MetricType::L2, &l2_a, &l2_b)
                 .unwrap_or_else(|error| panic!("{error}"));
-            path.count_oracle_a();
-            for metric in [MetricType::InnerProduct, MetricType::Cosine] {
-                assert_exact_i8(path.path, metric, &dot_a, &dot_b)
-                    .unwrap_or_else(|error| panic!("{error}"));
-                path.count_oracle_a();
-            }
+            run.count_oracle_a();
         }
+        for run in matching_combinations(combinations, TestElement::I8, MetricType::InnerProduct) {
+            assert_exact_i8(run.path, MetricType::InnerProduct, &dot_a, &dot_b)
+                .unwrap_or_else(|error| panic!("{error}"));
+            run.count_oracle_a();
+        }
+    }
+}
+
+// The cast pins the kernel's one final exact-integer-to-f32 conversion.
+#[allow(clippy::cast_possible_truncation)]
+fn run_i8_max_dimension(combinations: &[CombinationRun]) {
+    let query = vec![i8::MIN; MAX_I8_DIMENSION];
+    let target = vec![i8::MAX; MAX_I8_DIMENSION];
+    let expected_l2 = f64_oracle(MetricType::L2, &query, &target, f64::from).0 as f32;
+    let expected_dot = f64_oracle(MetricType::InnerProduct, &query, &target, f64::from).0 as f32;
+    assert_eq!(expected_l2.to_bits(), 2_130_739_200.0f32.to_bits());
+    assert_eq!(
+        expected_dot.to_bits(),
+        (-(32_768f64 * (-128f64 * 127f64)) as f32).to_bits()
+    );
+
+    for run in matching_combinations(combinations, TestElement::I8, MetricType::L2) {
+        assert_exact_i8(run.path, run.metric, &query, &target)
+            .unwrap_or_else(|error| panic!("{error}"));
+        run.count_oracle_a();
+    }
+    for run in matching_combinations(combinations, TestElement::I8, MetricType::InnerProduct) {
+        assert_exact_i8(run.path, run.metric, &query, &target)
+            .unwrap_or_else(|error| panic!("{error}"));
+        run.count_oracle_a();
     }
 }
 
@@ -609,33 +809,49 @@ fn vnni_query_bias_identity_matches_signed_dot_product() {
 
 #[test]
 fn all_constructible_paths_match_dual_oracles() {
-    let paths = constructible_paths();
-    assert!(!paths.is_empty(), "the scalar path must be constructible");
+    let combinations = constructible_combinations();
+    assert!(
+        combinations
+            .iter()
+            .any(|run| run.path == KernelPath::Scalar),
+        "the scalar path must be constructible"
+    );
 
-    run_fixed_dimensions(&paths);
-    run_zero_and_cancellation_cases(&paths);
-    run_i8_conversion_boundaries(&paths);
+    run_fixed_dimensions(&combinations);
+    run_zero_and_cancellation_cases(&combinations);
+    run_near_zero_exact_cases(&combinations);
+    run_batch_equivalence(&combinations);
+    run_i8_conversion_boundaries(&combinations);
+    run_i8_max_dimension(&combinations);
 
     property_runner()
         .run(&oracle_a_strategy(), |(grid_a, grid_b, i8_a, i8_b)| {
-            run_oracle_a_case(&paths, &grid_a, &grid_b, &i8_a, &i8_b).map_err(TestCaseError::fail)
+            run_oracle_a_case(&combinations, &grid_a, &grid_b, &i8_a, &i8_b)
+                .map_err(TestCaseError::fail)
         })
         .unwrap();
 
     property_runner()
         .run(&oracle_b_strategy(), |(f32_a, f32_b, i8_a, i8_b)| {
-            run_oracle_b_case(&paths, &f32_a, &f32_b, &i8_a, &i8_b).map_err(TestCaseError::fail)
+            run_oracle_b_case(&combinations, &f32_a, &f32_b, &i8_a, &i8_b)
+                .map_err(TestCaseError::fail)
         })
         .unwrap();
 
-    for path in &paths {
-        assert!(path.oracle_a_cases.get() > 0);
-        assert!(path.oracle_b_cases.get() > 0);
+    for run in &combinations {
+        assert!(run.oracle_a_cases.get() > 0);
+        assert!(run.oracle_b_cases.get() > 0);
+    }
+    for path in ALL_PATHS {
+        let path_runs: Vec<&CombinationRun> =
+            combinations.iter().filter(|run| run.path == path).collect();
+        let exact_case_count: usize = path_runs.iter().map(|run| run.oracle_a_cases.get()).sum();
+        let tolerant_case_count: usize = path_runs.iter().map(|run| run.oracle_b_cases.get()).sum();
         println!(
-            "path exercised: {:?}; oracle A cases: {}; oracle B cases: {}",
-            path.path,
-            path.oracle_a_cases.get(),
-            path.oracle_b_cases.get()
+            "path summary: {path:?}; exercised combinations: {}; skipped combinations: {}; \
+             oracle A cases: {exact_case_count}; oracle B cases: {tolerant_case_count}",
+            path_runs.len(),
+            SCORE_METRICS.len() * 3 - path_runs.len(),
         );
     }
 }

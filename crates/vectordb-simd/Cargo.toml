@@ -19,7 +19,7 @@ criterion.workspace = true
 proptest.workspace = true
 
 [[bench]]
-name = "distance"
+name = "score"
 harness = false
 required-features = ["bench-internals"]
 

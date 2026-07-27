@@ -11,13 +11,23 @@ use vectordb_core::F16;
 // integer kernels do the same with paired sixteen-byte chunks widened into i32 lane accumulators,
 // keeping the scalar remainder in i32 until the single final f32 conversion.
 //
-// Prefetch walks the target in 64-byte cache-line-sized steps and requests temporal L1 retention.
-// ScoreKernel dispatches it only for x86 SIMD paths; scalar-path prefetch remains a no-op.
+// Full-vector prefetch walks the target in 64-byte cache-line-sized steps; batch scoring bounds
+// its automatic hint to the first four lines. Both request temporal L1 retention. ScoreKernel
+// dispatches them only for x86 SIMD paths; scalar-path prefetch remains a no-op.
 const CACHE_LINE_BYTES: usize = 64;
+const PREFETCH_START_BYTES: usize = 4 * CACHE_LINE_BYTES;
 
 pub(crate) fn prefetch<T>(target: &[T]) {
+    prefetch_bytes(target, size_of_val(target));
+}
+
+pub(crate) fn prefetch_start<T>(target: &[T]) {
+    prefetch_bytes(target, size_of_val(target).min(PREFETCH_START_BYTES));
+}
+
+fn prefetch_bytes<T>(target: &[T], byte_len: usize) {
     let start = target.as_ptr().cast::<i8>();
-    for offset in (0..size_of_val(target)).step_by(CACHE_LINE_BYTES) {
+    for offset in (0..byte_len).step_by(CACHE_LINE_BYTES) {
         unsafe {
             // SAFETY: SSE is part of the x86_64 baseline, and prefetch is an
             // architectural hint that is valid for any address.
