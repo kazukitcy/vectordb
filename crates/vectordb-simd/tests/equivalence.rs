@@ -283,10 +283,11 @@ fn assert_exact_i8(path: KernelPath, metric: MetricType, a: &[i8], b: &[i8]) -> 
 fn tolerance(a_len: usize, term_magnitudes: f64) -> f64 {
     let dimension = f64::from(u32::try_from(a_len).expect("test dimension fits in u32"));
     // Sequential f32 summation has worst-case error <= (n-1)*eps*sum|terms|.
-    // The 4x margin covers FMA fusing, tree-reduction reassociation, and the
-    // f16-to-f32 conversion path. The absolute floor covers near-total
-    // cancellation, where the relative bound vanishes but f32 rounding noise
-    // does not; exact lane accounting remains Oracle A's responsibility.
+    // The 4x margin covers FMA fusing and tree-reduction reassociation
+    // (f16->f32 widening is exact and contributes no error). The absolute
+    // floor covers cases whose total term magnitude is so small that the
+    // relative bound falls below f32 rounding noise; exact lane accounting
+    // remains Oracle A's responsibility.
     (4.0 * dimension * EPSILON * term_magnitudes).max(1e-6)
 }
 
@@ -540,18 +541,26 @@ fn run_zero_and_cancellation_cases(combinations: &[CombinationRun]) {
 }
 
 fn run_near_zero_exact_cases(combinations: &[CombinationRun]) {
-    let f32_l2_a = [0.0f32];
-    let f32_l2_b = [0.000_976_562_5f32];
-    let f16_l2_a = [F16::from_f32(0.0)];
-    let f16_l2_b = [F16::from_f32(0.000_976_562_5)];
-    let f32_cancel_a = [1.0f32, 1.0, 1.0];
-    let f32_cancel_b = [0.000_976_562_5f32, -0.000_976_562_5, 0.0];
-    let f16_cancel_a = [F16::from_f32(1.0); 3];
-    let f16_cancel_b = [
-        F16::from_f32(0.000_976_562_5),
-        F16::from_f32(-0.000_976_562_5),
-        F16::from_f32(0.0),
-    ];
+    // 17 elements puts the small terms inside the widest SIMD main loop
+    // (AVX-512 processes 16 f32 lanes) plus a remainder lane, so these cases
+    // exercise vector arithmetic on small magnitudes, not just scalar tails.
+    const NEAR_ZERO_DIM: usize = 17;
+    const SMALL: f32 = 0.000_976_562_5; // 2^-10, exactly representable in f16
+
+    let f32_l2_a = [0.0f32; NEAR_ZERO_DIM];
+    let mut f32_l2_b = [SMALL; NEAR_ZERO_DIM];
+    f32_l2_b[NEAR_ZERO_DIM - 1] = 0.0;
+    let f16_l2_a = [F16::from_f32(0.0); NEAR_ZERO_DIM];
+    let f16_l2_b: Vec<F16> = f32_l2_b.iter().copied().map(F16::from_f32).collect();
+    let f32_cancel_a = [1.0f32; NEAR_ZERO_DIM];
+    let mut f32_cancel_b = [0.0f32; NEAR_ZERO_DIM];
+    for (index, value) in f32_cancel_b.iter_mut().enumerate() {
+        // Alternating +/- small terms cancel exactly across SIMD lanes.
+        *value = if index % 2 == 0 { SMALL } else { -SMALL };
+    }
+    f32_cancel_b[NEAR_ZERO_DIM - 1] = 0.0;
+    let f16_cancel_a = [F16::from_f32(1.0); NEAR_ZERO_DIM];
+    let f16_cancel_b: Vec<F16> = f32_cancel_b.iter().copied().map(F16::from_f32).collect();
 
     for run in matching_combinations(combinations, TestElement::F32, MetricType::L2) {
         assert_exact_f32(run.path, run.metric, &f32_l2_a, &f32_l2_b)
@@ -813,8 +822,10 @@ fn all_constructible_paths_match_dual_oracles() {
     assert!(
         combinations
             .iter()
-            .any(|run| run.path == KernelPath::Scalar),
-        "the scalar path must be constructible"
+            .filter(|run| run.path == KernelPath::Scalar)
+            .count()
+            == SCORE_METRICS.len() * 3,
+        "every scalar (element, metric) combination must be constructible"
     );
 
     run_fixed_dimensions(&combinations);

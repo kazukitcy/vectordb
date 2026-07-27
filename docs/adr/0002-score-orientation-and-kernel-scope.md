@@ -51,7 +51,10 @@ rounds, and distinct integer scores can collide; this resolution loss is
 accepted. The i8 `Cosine` metric maps to the same negated-dot kernel; it
 assumes inputs quantized from unit-normalized f32 vectors, and the end-to-end
 i8 cosine semantics (scale/bias metadata and distance correction terms) are
-defined in M6.
+defined in M6. AVX-512 availability for i8 is keyed on the metric: squared L2
+requires AVX-512F+BW only, while the dot metrics additionally require
+AVX-512VNNI (the dot kernel executes `vpdpbusd`; the L2 kernel widens with BW
+instructions).
 
 **Numeric envelope.** Float kernels accumulate in `f32`. Inputs whose
 intermediate sums exceed the f32 range can produce non-finite scores (±inf, or

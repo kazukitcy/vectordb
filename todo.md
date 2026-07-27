@@ -200,7 +200,8 @@ u32 の `RoaringBitmap` との取り違えに注意し、`u32::MAX` 境界のテ
 - [ ] ランタイム CPU 検出 + ディスパッチ。**カーネル毎の必要機能マトリクス**を定義:
   f32 → AVX2 / AVX-512 / NEON、f16 → x86 は F16C で f32 変換後に f32 演算(AVX-512FP16 は
   任意対応)、aarch64 は f32 変換 + NEON f32 演算(ネイティブ fp16 演算は
-  `stdarch_neon_f16` の安定化待ちで先送り)、i8 → AVX2 / AVX512-VNNI / NEON widening
+  `stdarch_neon_f16` の安定化待ちで先送り)、i8 → AVX2 / AVX-512(squared L2 は
+  F+BW、dot 系は F+BW+VNNI — メトリクス別に要求機能を分離)/ NEON widening
   積和(`vdotq_s32` は `stdarch_neon_dotprod` の安定化待ちで先送り)。
   f16 の利点は帯域/容量であり演算速度の向上を謳わない
 - [ ] 経路選択の網羅テスト: 純粋なリゾルバ関数に対する合成 feature マスクテストで

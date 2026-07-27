@@ -315,9 +315,9 @@ impl<T: Element> ScoreKernel<T> {
 
     /// Scores `query` against each target slice.
     ///
-    /// The entire batch is validated before any output is written. Before
+    /// The entire batch is validated before any output is written. While
     /// scoring a target, this method may issue best-effort prefetch hints for
-    /// up to the first 256 bytes of that target.
+    /// up to the first 256 bytes of the next target.
     ///
     /// # Panics
     ///
@@ -377,7 +377,9 @@ impl<T: Element> ScoreKernel<T> {
 
         let dimension = query.len();
         // Sequential rows are covered by hardware stride prefetchers; automatic
-        // full-row prefetch measured 1.29x slower at dimension 1536.
+        // full-row prefetch measured 1.29x slower at dimension 1536 (one-off
+        // review measurement, NEON; recorded in the adjudication log, not
+        // re-measured in CI).
         for (index, score) in out.iter_mut().enumerate() {
             let start = index * dimension;
             *score = self.invoke(query, &vectors[start..start + dimension]);
@@ -402,6 +404,8 @@ impl<T: Element> ScoreKernel<T> {
         let _ = target;
     }
 
+    // On targets without a prefetch primitive the body ignores self entirely.
+    #[allow(clippy::unused_self)]
     fn prefetch_start(&self, target: &[T]) {
         #[cfg(target_arch = "x86_64")]
         if matches!(self.path, KernelPath::Avx2 | KernelPath::Avx512) {
@@ -549,7 +553,8 @@ pub(crate) fn resolve_path(
                     ElementKind::F16 => features.f16c,
                     // VNNI backs only the dot-product kernel; squared L2 widens
                     // with BW instructions. Unknown future metrics take the
-                    // stricter requirement.
+                    // stricter requirement (defensive only: kernel_table panics
+                    // on an unknown variant before the resolver runs).
                     ElementKind::I8 => {
                         features.avx512bw
                             && (matches!(metric, MetricType::L2) || features.avx512vnni)
@@ -564,7 +569,7 @@ pub(crate) fn resolve_path(
             Ok(path)
         } else {
             Err(Error::unsupported(format!(
-                "{path:?} is unavailable for {element:?} on {arch:?}"
+                "{path:?} is unavailable for {element:?}/{metric:?} on {arch:?}"
             )))
         };
     }
@@ -832,14 +837,30 @@ mod tests {
             .unwrap(),
             KernelPath::Avx512
         );
-        assert_unsupported(resolve_path(
-            Arch::X86_64,
-            &without_vnni,
-            &implemented,
-            ElementKind::I8,
-            MetricType::InnerProduct,
-            Some(KernelPath::Avx512),
-        ));
+        // Both dot metrics share the VNNI kernel; assert the split for each so
+        // a predicate refactor cannot silently admit Cosine without VNNI.
+        for metric in [MetricType::InnerProduct, MetricType::Cosine] {
+            assert_unsupported(resolve_path(
+                Arch::X86_64,
+                &without_vnni,
+                &implemented,
+                ElementKind::I8,
+                metric,
+                Some(KernelPath::Avx512),
+            ));
+            assert_eq!(
+                resolve_path(
+                    Arch::X86_64,
+                    &without_vnni,
+                    &implemented,
+                    ElementKind::I8,
+                    metric,
+                    None,
+                )
+                .unwrap(),
+                KernelPath::Avx2
+            );
+        }
         assert_eq!(
             resolve_path(
                 Arch::X86_64,
@@ -851,18 +872,6 @@ mod tests {
             )
             .unwrap(),
             KernelPath::Avx512
-        );
-        assert_eq!(
-            resolve_path(
-                Arch::X86_64,
-                &without_vnni,
-                &implemented,
-                ElementKind::I8,
-                MetricType::InnerProduct,
-                None,
-            )
-            .unwrap(),
-            KernelPath::Avx2
         );
     }
 

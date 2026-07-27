@@ -174,6 +174,36 @@ fn bench_batch<T: Element>(
             }
         }
         group.finish();
+
+        // score_many is the graph-search hot path and carries the bounded
+        // automatic prefetch; record it separately from the contiguous scan.
+        let mut group =
+            criterion.benchmark_group(format!("{element}/{}/many", metric_name(metric)));
+        for dimension in DIMENSIONS {
+            let query = make_values(dimension, 3);
+            let targets: Vec<Vec<T>> = (0..BATCH_SIZE)
+                .map(|seed| make_values(dimension, 11 + seed))
+                .collect();
+            let target_slices: Vec<&[T]> = targets.iter().map(Vec::as_slice).collect();
+            group.throughput(Throughput::Elements((dimension * BATCH_SIZE) as u64));
+
+            for path in PATHS {
+                let Ok(kernel) = ScoreKernel::<T>::with_path(metric, path) else {
+                    continue;
+                };
+                group.bench_function(BenchmarkId::new(path_name(path), dimension), |bencher| {
+                    let mut out = vec![0.0; BATCH_SIZE];
+                    bencher.iter(|| {
+                        kernel.score_many(
+                            black_box(query.as_slice()),
+                            black_box(target_slices.as_slice()),
+                            black_box(out.as_mut_slice()),
+                        );
+                    });
+                });
+            }
+        }
+        group.finish();
     }
 }
 

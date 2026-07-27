@@ -40,6 +40,13 @@ jobs:
         run: cargo fmt --all --check
       - name: Lint
         run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
+      # bench-internals targets carry required-features, so the workspace lint
+      # above skips them; this keeps them inside the required -D warnings gate.
+      - name: Lint benchmark internals
+        run: >-
+          cargo clippy -p vectordb-simd --all-targets
+          --features bench-internals --target ${{ matrix.target }}
+          -- -D warnings
       - name: Test
         env:
           VECTORDB_SIMD_REQUIRE: ${{ matrix.simd_require }}
@@ -84,9 +91,13 @@ jobs:
           -- -D warnings
       - name: Record criterion benchmarks
         shell: bash
-        run: >-
-          cargo bench -p vectordb-simd --features bench-internals
-          --target ${{ matrix.target }} -- --noplot | tee bench.log
+        # Drop criterion state restored from the cache: stale group directories
+        # from renamed/removed benchmarks would otherwise pollute the uploaded
+        # artifact and skew criterion's change-vs-baseline comparisons.
+        run: |
+          rm -rf target/criterion
+          cargo bench -p vectordb-simd --features bench-internals \
+            --target ${{ matrix.target }} -- --noplot | tee bench.log
       - name: Record speedup report
         env:
           VECTORDB_SIMD_REQUIRE: ${{ matrix.simd_require }}
