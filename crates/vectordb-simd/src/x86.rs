@@ -6,10 +6,10 @@ use std::mem::size_of_val;
 
 use vectordb_core::F16;
 
-// Float kernels process paired eight-lane chunks with independent accumulators, combine them
-// once, reduce the eight lanes once, and then use the scalar formulas for the remainder. Integer
-// kernels do the same with paired sixteen-byte chunks widened into i32 lane accumulators, keeping
-// the scalar remainder in i32 until the single final f32 conversion.
+// AVX2 float kernels process paired eight-lane chunks with independent accumulators, combine them
+// once, reduce the eight lanes once, and then use the scalar formulas for the remainder. AVX2
+// integer kernels do the same with paired sixteen-byte chunks widened into i32 lane accumulators,
+// keeping the scalar remainder in i32 until the single final f32 conversion.
 //
 // Prefetch walks the target in 64-byte cache-line-sized steps and requests temporal L1 retention.
 // ScoreKernel dispatches it only for x86 SIMD paths; scalar-path prefetch remains a no-op.
@@ -459,4 +459,345 @@ pub(crate) unsafe fn neg_dot_i8(a: &[i8], b: &[i8]) -> f32 {
         index += 1;
     }
     -(sum as f32)
+}
+
+// Safety preconditions: `index..index + 16` is in bounds for `values`, and the CPU supports
+// AVX-512F and F16C.
+#[inline]
+#[allow(clippy::cast_ptr_alignment)]
+#[target_feature(enable = "avx512f,f16c")]
+unsafe fn load_f16x16(values: &[F16], index: usize) -> __m512 {
+    let low_bits = unsafe {
+        // SAFETY: the caller provides 16 readable F16 values from `index`; F16's layout contract
+        // makes the first eight values 16 readable bytes, and the intrinsic permits an unaligned
+        // address.
+        _mm_loadu_si128(values.as_ptr().wrapping_add(index).cast::<__m128i>())
+    };
+    let high_bits = unsafe {
+        // SAFETY: the caller provides 16 readable F16 values from `index`; F16's layout contract
+        // makes the second eight values 16 readable bytes, and the intrinsic permits an unaligned
+        // address.
+        _mm_loadu_si128(values.as_ptr().wrapping_add(index + 8).cast::<__m128i>())
+    };
+    let low = _mm256_cvtph_ps(low_bits);
+    let high = _mm256_cvtph_ps(high_bits);
+    _mm512_shuffle_f32x4::<0x44>(_mm512_castps256_ps512(low), _mm512_castps256_ps512(high))
+}
+
+// Safety preconditions: the caller guarantees equal lengths and that the CPU supports AVX-512F.
+#[target_feature(enable = "avx512f")]
+pub(crate) unsafe fn squared_l2_f32_avx512(a: &[f32], b: &[f32]) -> f32 {
+    let mut first_accumulator = _mm512_setzero_ps();
+    let mut second_accumulator = _mm512_setzero_ps();
+    let mut index = 0;
+
+    while a.len() - index >= 32 {
+        let left_first = unsafe {
+            // SAFETY: the loop bound leaves 16 f32 elements at this offset.
+            _mm512_loadu_ps(a.as_ptr().wrapping_add(index))
+        };
+        let right_first = unsafe {
+            // SAFETY: equal lengths and the loop bound leave 16 f32 elements at this offset.
+            _mm512_loadu_ps(b.as_ptr().wrapping_add(index))
+        };
+        let left_second = unsafe {
+            // SAFETY: the loop bound leaves 16 f32 elements at this offset.
+            _mm512_loadu_ps(a.as_ptr().wrapping_add(index + 16))
+        };
+        let right_second = unsafe {
+            // SAFETY: equal lengths and the loop bound leave 16 f32 elements at this offset.
+            _mm512_loadu_ps(b.as_ptr().wrapping_add(index + 16))
+        };
+
+        let first_difference = _mm512_sub_ps(left_first, right_first);
+        let second_difference = _mm512_sub_ps(left_second, right_second);
+        first_accumulator = _mm512_fmadd_ps(first_difference, first_difference, first_accumulator);
+        second_accumulator =
+            _mm512_fmadd_ps(second_difference, second_difference, second_accumulator);
+        index += 32;
+    }
+
+    if a.len() - index >= 16 {
+        let left = unsafe {
+            // SAFETY: the remainder bound leaves 16 f32 elements at this offset.
+            _mm512_loadu_ps(a.as_ptr().wrapping_add(index))
+        };
+        let right = unsafe {
+            // SAFETY: equal lengths and the remainder bound leave 16 f32 elements here.
+            _mm512_loadu_ps(b.as_ptr().wrapping_add(index))
+        };
+        let difference = _mm512_sub_ps(left, right);
+        first_accumulator = _mm512_fmadd_ps(difference, difference, first_accumulator);
+        index += 16;
+    }
+
+    let mut sum = _mm512_reduce_add_ps(_mm512_add_ps(first_accumulator, second_accumulator));
+    while index < a.len() {
+        let difference = a[index] - b[index];
+        sum += difference * difference;
+        index += 1;
+    }
+    sum
+}
+
+// Safety preconditions: the caller guarantees equal lengths and that the CPU supports AVX-512F.
+#[target_feature(enable = "avx512f")]
+pub(crate) unsafe fn neg_dot_f32_avx512(a: &[f32], b: &[f32]) -> f32 {
+    let mut first_accumulator = _mm512_setzero_ps();
+    let mut second_accumulator = _mm512_setzero_ps();
+    let mut index = 0;
+
+    while a.len() - index >= 32 {
+        let left_first = unsafe {
+            // SAFETY: the loop bound leaves 16 f32 elements at this offset.
+            _mm512_loadu_ps(a.as_ptr().wrapping_add(index))
+        };
+        let right_first = unsafe {
+            // SAFETY: equal lengths and the loop bound leave 16 f32 elements at this offset.
+            _mm512_loadu_ps(b.as_ptr().wrapping_add(index))
+        };
+        let left_second = unsafe {
+            // SAFETY: the loop bound leaves 16 f32 elements at this offset.
+            _mm512_loadu_ps(a.as_ptr().wrapping_add(index + 16))
+        };
+        let right_second = unsafe {
+            // SAFETY: equal lengths and the loop bound leave 16 f32 elements at this offset.
+            _mm512_loadu_ps(b.as_ptr().wrapping_add(index + 16))
+        };
+
+        first_accumulator = _mm512_fmadd_ps(left_first, right_first, first_accumulator);
+        second_accumulator = _mm512_fmadd_ps(left_second, right_second, second_accumulator);
+        index += 32;
+    }
+
+    if a.len() - index >= 16 {
+        let left = unsafe {
+            // SAFETY: the remainder bound leaves 16 f32 elements at this offset.
+            _mm512_loadu_ps(a.as_ptr().wrapping_add(index))
+        };
+        let right = unsafe {
+            // SAFETY: equal lengths and the remainder bound leave 16 f32 elements here.
+            _mm512_loadu_ps(b.as_ptr().wrapping_add(index))
+        };
+        first_accumulator = _mm512_fmadd_ps(left, right, first_accumulator);
+        index += 16;
+    }
+
+    let mut sum = _mm512_reduce_add_ps(_mm512_add_ps(first_accumulator, second_accumulator));
+    while index < a.len() {
+        sum += a[index] * b[index];
+        index += 1;
+    }
+    -sum
+}
+
+// Safety preconditions: the caller guarantees equal lengths and that the CPU supports AVX-512F
+// and F16C.
+#[target_feature(enable = "avx512f,f16c")]
+pub(crate) unsafe fn squared_l2_f16_avx512(a: &[F16], b: &[F16]) -> f32 {
+    let mut first_accumulator = _mm512_setzero_ps();
+    let mut second_accumulator = _mm512_setzero_ps();
+    let mut index = 0;
+
+    while a.len() - index >= 32 {
+        let left_first = unsafe {
+            // SAFETY: the loop bound leaves 16 elements, and this function requires the helper's
+            // complete CPU feature set.
+            load_f16x16(a, index)
+        };
+        let right_first = unsafe {
+            // SAFETY: equal lengths and the loop bound leave 16 elements, and this function
+            // requires the helper's complete CPU feature set.
+            load_f16x16(b, index)
+        };
+        let left_second = unsafe {
+            // SAFETY: the loop bound leaves 16 elements, and this function requires the helper's
+            // complete CPU feature set.
+            load_f16x16(a, index + 16)
+        };
+        let right_second = unsafe {
+            // SAFETY: equal lengths and the loop bound leave 16 elements, and this function
+            // requires the helper's complete CPU feature set.
+            load_f16x16(b, index + 16)
+        };
+
+        let first_difference = _mm512_sub_ps(left_first, right_first);
+        let second_difference = _mm512_sub_ps(left_second, right_second);
+        first_accumulator = _mm512_fmadd_ps(first_difference, first_difference, first_accumulator);
+        second_accumulator =
+            _mm512_fmadd_ps(second_difference, second_difference, second_accumulator);
+        index += 32;
+    }
+
+    if a.len() - index >= 16 {
+        let left = unsafe {
+            // SAFETY: the remainder bound leaves 16 elements, and this function requires the
+            // helper's complete CPU feature set.
+            load_f16x16(a, index)
+        };
+        let right = unsafe {
+            // SAFETY: equal lengths and the remainder bound leave 16 elements, and this function
+            // requires the helper's complete CPU feature set.
+            load_f16x16(b, index)
+        };
+        let difference = _mm512_sub_ps(left, right);
+        first_accumulator = _mm512_fmadd_ps(difference, difference, first_accumulator);
+        index += 16;
+    }
+
+    let mut sum = _mm512_reduce_add_ps(_mm512_add_ps(first_accumulator, second_accumulator));
+    while index < a.len() {
+        let difference = a[index].to_f32() - b[index].to_f32();
+        sum += difference * difference;
+        index += 1;
+    }
+    sum
+}
+
+// Safety preconditions: the caller guarantees equal lengths and that the CPU supports AVX-512F
+// and F16C.
+#[target_feature(enable = "avx512f,f16c")]
+pub(crate) unsafe fn neg_dot_f16_avx512(a: &[F16], b: &[F16]) -> f32 {
+    let mut first_accumulator = _mm512_setzero_ps();
+    let mut second_accumulator = _mm512_setzero_ps();
+    let mut index = 0;
+
+    while a.len() - index >= 32 {
+        let left_first = unsafe {
+            // SAFETY: the loop bound leaves 16 elements, and this function requires the helper's
+            // complete CPU feature set.
+            load_f16x16(a, index)
+        };
+        let right_first = unsafe {
+            // SAFETY: equal lengths and the loop bound leave 16 elements, and this function
+            // requires the helper's complete CPU feature set.
+            load_f16x16(b, index)
+        };
+        let left_second = unsafe {
+            // SAFETY: the loop bound leaves 16 elements, and this function requires the helper's
+            // complete CPU feature set.
+            load_f16x16(a, index + 16)
+        };
+        let right_second = unsafe {
+            // SAFETY: equal lengths and the loop bound leave 16 elements, and this function
+            // requires the helper's complete CPU feature set.
+            load_f16x16(b, index + 16)
+        };
+
+        first_accumulator = _mm512_fmadd_ps(left_first, right_first, first_accumulator);
+        second_accumulator = _mm512_fmadd_ps(left_second, right_second, second_accumulator);
+        index += 32;
+    }
+
+    if a.len() - index >= 16 {
+        let left = unsafe {
+            // SAFETY: the remainder bound leaves 16 elements, and this function requires the
+            // helper's complete CPU feature set.
+            load_f16x16(a, index)
+        };
+        let right = unsafe {
+            // SAFETY: equal lengths and the remainder bound leave 16 elements, and this function
+            // requires the helper's complete CPU feature set.
+            load_f16x16(b, index)
+        };
+        first_accumulator = _mm512_fmadd_ps(left, right, first_accumulator);
+        index += 16;
+    }
+
+    let mut sum = _mm512_reduce_add_ps(_mm512_add_ps(first_accumulator, second_accumulator));
+    while index < a.len() {
+        sum += a[index].to_f32() * b[index].to_f32();
+        index += 1;
+    }
+    -sum
+}
+
+// Safety preconditions: the caller guarantees equal lengths, a length no greater than
+// MAX_I8_DIMENSION, and that the CPU supports AVX-512F, AVX-512BW, and AVX-512VNNI.
+#[allow(clippy::cast_precision_loss, clippy::cast_ptr_alignment)]
+#[target_feature(enable = "avx512f,avx512bw,avx512vnni")]
+pub(crate) unsafe fn squared_l2_i8_avx512(a: &[i8], b: &[i8]) -> f32 {
+    let mut first_accumulator = _mm512_setzero_si512();
+    let mut second_accumulator = _mm512_setzero_si512();
+    let mut index = 0;
+
+    while a.len() - index >= 64 {
+        let left_bytes = unsafe {
+            // SAFETY: the loop bound provides 64 readable bytes; the intrinsic permits an
+            // unaligned address.
+            _mm512_loadu_si512(a.as_ptr().wrapping_add(index).cast::<__m512i>())
+        };
+        let right_bytes = unsafe {
+            // SAFETY: equal lengths and the loop bound provide 64 readable bytes; the intrinsic
+            // permits an unaligned address.
+            _mm512_loadu_si512(b.as_ptr().wrapping_add(index).cast::<__m512i>())
+        };
+
+        let left_first = _mm512_cvtepi8_epi16(_mm512_castsi512_si256(left_bytes));
+        let right_first = _mm512_cvtepi8_epi16(_mm512_castsi512_si256(right_bytes));
+        let left_second = _mm512_cvtepi8_epi16(_mm512_extracti64x4_epi64::<1>(left_bytes));
+        let right_second = _mm512_cvtepi8_epi16(_mm512_extracti64x4_epi64::<1>(right_bytes));
+        let first_difference = _mm512_sub_epi16(left_first, right_first);
+        let second_difference = _mm512_sub_epi16(left_second, right_second);
+        first_accumulator = _mm512_add_epi32(
+            first_accumulator,
+            _mm512_madd_epi16(first_difference, first_difference),
+        );
+        second_accumulator = _mm512_add_epi32(
+            second_accumulator,
+            _mm512_madd_epi16(second_difference, second_difference),
+        );
+        index += 64;
+    }
+
+    let mut sum = _mm512_reduce_add_epi32(_mm512_add_epi32(first_accumulator, second_accumulator));
+    while index < a.len() {
+        let difference = i32::from(a[index]) - i32::from(b[index]);
+        sum += difference * difference;
+        index += 1;
+    }
+    sum as f32
+}
+
+// Safety preconditions: the caller guarantees equal lengths, a length no greater than
+// MAX_I8_DIMENSION, and that the CPU supports AVX-512F, AVX-512BW, and AVX-512VNNI.
+#[allow(clippy::cast_precision_loss, clippy::cast_ptr_alignment)]
+#[target_feature(enable = "avx512f,avx512bw,avx512vnni")]
+pub(crate) unsafe fn neg_dot_i8_avx512(a: &[i8], b: &[i8]) -> f32 {
+    let mut dpbusd_accumulator = _mm512_setzero_si512();
+    let mut target_sum_accumulator = _mm512_setzero_si512();
+    let query_bias = _mm512_set1_epi8(i8::MIN);
+    let unsigned_ones = _mm512_set1_epi8(1);
+    let mut index = 0;
+
+    while a.len() - index >= 64 {
+        let query_bytes = unsafe {
+            // SAFETY: the loop bound provides 64 readable query bytes; the intrinsic permits an
+            // unaligned address.
+            _mm512_loadu_si512(a.as_ptr().wrapping_add(index).cast::<__m512i>())
+        };
+        let target_bytes = unsafe {
+            // SAFETY: equal lengths and the loop bound provide 64 readable target bytes; the
+            // intrinsic permits an unaligned address.
+            _mm512_loadu_si512(b.as_ptr().wrapping_add(index).cast::<__m512i>())
+        };
+        let unsigned_query = _mm512_xor_si512(query_bytes, query_bias);
+        dpbusd_accumulator = _mm512_dpbusd_epi32(dpbusd_accumulator, unsigned_query, target_bytes);
+        target_sum_accumulator =
+            _mm512_dpbusd_epi32(target_sum_accumulator, unsigned_ones, target_bytes);
+        index += 64;
+    }
+
+    let mut dpbusd_total = _mm512_reduce_add_epi32(dpbusd_accumulator);
+    let mut target_sum = _mm512_reduce_add_epi32(target_sum_accumulator);
+    while index < a.len() {
+        let unsigned_query = u8::from_ne_bytes(a[index].to_ne_bytes()) ^ 0x80;
+        let target = i32::from(b[index]);
+        dpbusd_total += i32::from(unsigned_query) * target;
+        target_sum += target;
+        index += 1;
+    }
+
+    let dot = dpbusd_total - 128 * target_sum;
+    -(dot as f32)
 }

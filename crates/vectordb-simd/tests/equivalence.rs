@@ -19,8 +19,49 @@ const FIXED_DIMENSIONS: [usize; 21] = [
 ];
 const OFFSETS: [usize; 3] = [0, 1, 3];
 const EPSILON: f64 = f32::EPSILON as f64;
+const DPBUSD_BYTE_LANES: usize = 64;
+const DPBUSD_I32_LANES: usize = 16;
 
 type CheckResult = Result<(), String>;
+
+fn emulate_dpbusd(
+    mut accumulators: [i32; DPBUSD_I32_LANES],
+    unsigned: &[u8],
+    signed: &[i8],
+) -> [i32; DPBUSD_I32_LANES] {
+    assert_eq!(unsigned.len(), DPBUSD_BYTE_LANES);
+    assert_eq!(signed.len(), DPBUSD_BYTE_LANES);
+
+    for (lane, accumulator) in accumulators.iter_mut().enumerate() {
+        let start = lane * 4;
+        for element in 0..4 {
+            *accumulator +=
+                i32::from(unsigned[start + element]) * i32::from(signed[start + element]);
+        }
+    }
+    accumulators
+}
+
+fn vnni_bias_identity_sides(query: &[i8], target: &[i8]) -> (i32, i32) {
+    assert_eq!(query.len(), DPBUSD_BYTE_LANES);
+    assert_eq!(target.len(), DPBUSD_BYTE_LANES);
+
+    let biased_query: Vec<u8> = query
+        .iter()
+        .map(|value| u8::from_ne_bytes(value.to_ne_bytes()) ^ 0x80)
+        .collect();
+    let dpbusd_total: i32 = emulate_dpbusd([0; DPBUSD_I32_LANES], &biased_query, target)
+        .into_iter()
+        .sum();
+    let target_sum: i32 = target.iter().copied().map(i32::from).sum();
+    let dot: i32 = query
+        .iter()
+        .copied()
+        .zip(target.iter().copied())
+        .map(|(left, right)| i32::from(left) * i32::from(right))
+        .sum();
+    (dot, dpbusd_total - 128 * target_sum)
+}
 
 struct PathRun {
     path: KernelPath,
@@ -528,6 +569,42 @@ fn property_runner() -> TestRunner {
         failure_persistence: None,
         ..ProptestConfig::default()
     })
+}
+
+#[test]
+fn vnni_query_bias_identity_matches_signed_dot_product() {
+    const EDGE_VALUES: [i8; 7] = [-128, -127, -1, 0, 1, 126, 127];
+
+    for query_value in EDGE_VALUES {
+        for target_value in EDGE_VALUES {
+            let query = [query_value; DPBUSD_BYTE_LANES];
+            let target = [target_value; DPBUSD_BYTE_LANES];
+            let (dot, corrected_dpbusd) = vnni_bias_identity_sides(&query, &target);
+            assert_eq!(
+                dot, corrected_dpbusd,
+                "query value {query_value}, target value {target_value}"
+            );
+        }
+    }
+
+    let asymmetric_vectors = (
+        prop::collection::vec(any::<i8>(), DPBUSD_BYTE_LANES),
+        prop::collection::vec(any::<i8>(), DPBUSD_BYTE_LANES),
+    )
+        .prop_filter("query and target vectors must differ", |(query, target)| {
+            query != target
+        });
+    TestRunner::new(ProptestConfig {
+        cases: 32,
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })
+    .run(&asymmetric_vectors, |(query, target)| {
+        let (dot, corrected_dpbusd) = vnni_bias_identity_sides(&query, &target);
+        prop_assert_eq!(dot, corrected_dpbusd);
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[test]

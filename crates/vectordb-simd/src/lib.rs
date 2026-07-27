@@ -80,6 +80,12 @@ mod sealed {
             self
         }
 
+        #[cfg(target_arch = "x86_64")]
+        const fn with_avx512(mut self, kernel: KernelFn<T>) -> Self {
+            self.avx512 = Some(kernel);
+            self
+        }
+
         pub(super) const fn implemented_paths(&self) -> ImplementedPaths {
             ImplementedPaths {
                 scalar: true,
@@ -140,6 +146,12 @@ mod sealed {
                 super::x86::squared_l2_f32,
                 super::x86::neg_dot_f32,
             ));
+            #[cfg(target_arch = "x86_64")]
+            let table = table.with_avx512(metric_kernel(
+                metric,
+                super::x86::squared_l2_f32_avx512,
+                super::x86::neg_dot_f32_avx512,
+            ));
             table
         }
     }
@@ -155,6 +167,12 @@ mod sealed {
                 super::x86::squared_l2_f16,
                 super::x86::neg_dot_f16,
             ));
+            #[cfg(target_arch = "x86_64")]
+            let table = table.with_avx512(metric_kernel(
+                metric,
+                super::x86::squared_l2_f16_avx512,
+                super::x86::neg_dot_f16_avx512,
+            ));
             table
         }
     }
@@ -169,6 +187,12 @@ mod sealed {
                 metric,
                 super::x86::squared_l2_i8,
                 super::x86::neg_dot_i8,
+            ));
+            #[cfg(target_arch = "x86_64")]
+            let table = table.with_avx512(metric_kernel(
+                metric,
+                super::x86::squared_l2_i8_avx512,
+                super::x86::neg_dot_i8_avx512,
             ));
             table
         }
