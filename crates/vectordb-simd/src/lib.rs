@@ -13,6 +13,8 @@
 //! input component is finite.
 
 mod scalar;
+#[cfg(target_arch = "x86_64")]
+mod x86;
 
 use core::fmt;
 
@@ -72,6 +74,12 @@ mod sealed {
             }
         }
 
+        #[cfg(target_arch = "x86_64")]
+        const fn with_avx2(mut self, kernel: KernelFn<T>) -> Self {
+            self.avx2 = Some(kernel);
+            self
+        }
+
         pub(super) const fn implemented_paths(&self) -> ImplementedPaths {
             ImplementedPaths {
                 scalar: true,
@@ -91,16 +99,24 @@ mod sealed {
         }
     }
 
+    fn metric_kernel<T>(
+        metric: MetricType,
+        squared_l2: KernelFn<T>,
+        neg_dot: KernelFn<T>,
+    ) -> KernelFn<T> {
+        match metric {
+            MetricType::L2 => squared_l2,
+            MetricType::InnerProduct | MetricType::Cosine => neg_dot,
+            _ => panic!("unknown metric variant: {metric:?}"),
+        }
+    }
+
     fn scalar_table<T>(
         metric: MetricType,
         squared_l2: KernelFn<T>,
         neg_dot: KernelFn<T>,
     ) -> KernelTable<T> {
-        match metric {
-            MetricType::L2 => KernelTable::scalar(squared_l2),
-            MetricType::InnerProduct | MetricType::Cosine => KernelTable::scalar(neg_dot),
-            _ => panic!("unknown metric variant: {metric:?}"),
-        }
+        KernelTable::scalar(metric_kernel(metric, squared_l2, neg_dot))
     }
 
     pub trait Sealed {
@@ -117,7 +133,14 @@ mod sealed {
         const KIND: ElementKind = ElementKind::F32;
 
         fn kernel_table(metric: MetricType) -> KernelTable<Self> {
-            scalar_table(metric, scalar::squared_l2_f32, scalar::neg_dot_f32)
+            let table = scalar_table(metric, scalar::squared_l2_f32, scalar::neg_dot_f32);
+            #[cfg(target_arch = "x86_64")]
+            let table = table.with_avx2(metric_kernel(
+                metric,
+                super::x86::squared_l2_f32,
+                super::x86::neg_dot_f32,
+            ));
+            table
         }
     }
 
@@ -125,7 +148,14 @@ mod sealed {
         const KIND: ElementKind = ElementKind::F16;
 
         fn kernel_table(metric: MetricType) -> KernelTable<Self> {
-            scalar_table(metric, scalar::squared_l2_f16, scalar::neg_dot_f16)
+            let table = scalar_table(metric, scalar::squared_l2_f16, scalar::neg_dot_f16);
+            #[cfg(target_arch = "x86_64")]
+            let table = table.with_avx2(metric_kernel(
+                metric,
+                super::x86::squared_l2_f16,
+                super::x86::neg_dot_f16,
+            ));
+            table
         }
     }
 
@@ -133,7 +163,14 @@ mod sealed {
         const KIND: ElementKind = ElementKind::I8;
 
         fn kernel_table(metric: MetricType) -> KernelTable<Self> {
-            scalar_table(metric, scalar::squared_l2_i8, scalar::neg_dot_i8)
+            let table = scalar_table(metric, scalar::squared_l2_i8, scalar::neg_dot_i8);
+            #[cfg(target_arch = "x86_64")]
+            let table = table.with_avx2(metric_kernel(
+                metric,
+                super::x86::squared_l2_i8,
+                super::x86::neg_dot_i8,
+            ));
+            table
         }
 
         fn validate_dimension(dimension: usize) {
@@ -288,7 +325,15 @@ impl<T: Element> ScoreKernel<T> {
     /// Hints that `target` will be scored soon.
     ///
     /// This is a no-op on paths or platforms without a prefetch primitive.
-    pub fn prefetch(&self, _target: &[T]) {}
+    pub fn prefetch(&self, target: &[T]) {
+        #[cfg(target_arch = "x86_64")]
+        if matches!(self.path, KernelPath::Avx2 | KernelPath::Avx512) {
+            x86::prefetch(target);
+        }
+
+        #[cfg(not(target_arch = "x86_64"))]
+        let _ = target;
+    }
 
     fn construct(metric: MetricType, requested: Option<KernelPath>) -> Result<Self> {
         let table = T::kernel_table(metric);

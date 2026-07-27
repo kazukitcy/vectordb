@@ -20,6 +20,7 @@ jobs:
           - name: Linux x86_64
             runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            simd_require: avx2
           - name: macOS aarch64
             runner: macos-latest
             target: aarch64-apple-darwin
@@ -39,6 +40,8 @@ jobs:
       - name: Lint
         run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
       - name: Test
+        env:
+          VECTORDB_SIMD_REQUIRE: ${{ matrix.simd_require }}
         run: cargo test --workspace --target ${{ matrix.target }}
 
   sanitizer:
