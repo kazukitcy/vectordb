@@ -14,6 +14,9 @@
 
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
+#[cfg(feature = "bench-internals")]
+#[doc(hidden)]
+pub mod baseline;
 mod scalar;
 #[cfg(target_arch = "x86_64")]
 mod x86;

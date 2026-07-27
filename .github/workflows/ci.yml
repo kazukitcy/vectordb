@@ -45,6 +45,101 @@ jobs:
           VECTORDB_SIMD_REQUIRE: ${{ matrix.simd_require }}
         run: cargo test --workspace --target ${{ matrix.target }}
 
+  bench:
+    name: bench (simd)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            simd_require: avx2
+          - name: macOS aarch64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            simd_require: neon
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: 1.93.1
+          components: rustfmt, clippy
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: bench-${{ matrix.target }}
+      - name: Test benchmark internals
+        run: >-
+          cargo test -p vectordb-simd --features bench-internals
+          --target ${{ matrix.target }}
+      - name: Record criterion benchmarks
+        shell: bash
+        run: >-
+          cargo bench -p vectordb-simd --features bench-internals
+          --target ${{ matrix.target }} -- --noplot | tee bench.log
+      - name: Record speedup report
+        shell: bash
+        run: >-
+          cargo test -p vectordb-simd --release --features bench-internals
+          --target ${{ matrix.target }}
+          -- --ignored speedup_report --nocapture | tee speedup.log
+      # macOS/aarch64 is skipped because scalar FP shares vector registers there.
+      - name: Verify benchmark baselines remain scalar
+        if: matrix.name == 'Linux x86_64'
+        shell: bash
+        run: |
+          executable="$(
+            cargo test -p vectordb-simd --release --features bench-internals \
+              --target "${{ matrix.target }}" --test speedup --no-run \
+              --message-format=json |
+              jq -r 'select(.reason == "compiler-artifact" and .target.name == "speedup" and .executable != null) | .executable' |
+              tail -n 1
+          )"
+          test -n "$executable"
+          test -x "$executable"
+          objdump -d -C "$executable" > speedup.disassembly
+
+          for symbol in \
+            squared_l2_f32 neg_dot_f32 squared_l2_f16 \
+            neg_dot_f16 squared_l2_i8 neg_dot_i8
+          do
+            grep -q "vectordb_simd::baseline::$symbol" speedup.disassembly
+          done
+
+          awk '
+            /^[[:xdigit:]]+ <vectordb_simd::baseline::(squared_l2|neg_dot)/ {
+              capture = 1
+              found = 1
+            }
+            capture { print }
+            capture && /^$/ { capture = 0 }
+            END { if (!found) exit 1 }
+          ' speedup.disassembly > baseline.disassembly
+          test -s baseline.disassembly
+
+          # Only packed ARITHMETIC counts as vectorization evidence: scalar SSE
+          # codegen idiomatically uses movaps/movups (register moves) and
+          # xorps/pxor (register zeroing) even in fully scalar loops.
+          packed_pattern='[[:space:]](v?(add|sub|mul|div|min|max|sqrt|hadd|dp)[[:alnum:]]*(ps|pd)|vfm[[:alnum:]]*(ps|pd)|v?p(add|sub|mul|madd|mull|mulh)[[:alnum:]]*)[[:space:]]'
+          if grep -Ei "$packed_pattern" baseline.disassembly
+          then
+            echo "packed vector instruction found in benchmark baseline" >&2
+            exit 1
+          fi
+      - name: Upload benchmark records
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: simd-bench-${{ matrix.name }}
+          path: |
+            bench.log
+            speedup.log
+            target/criterion
+          if-no-files-found: error
+          retention-days: 90
+
   sanitizer:
     name: sanitizer (${{ matrix.name }})
     runs-on: ubuntu-latest
