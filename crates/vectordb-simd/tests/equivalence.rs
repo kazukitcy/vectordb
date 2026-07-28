@@ -280,77 +280,63 @@ fn assert_exact_i8(path: KernelPath, metric: MetricType, a: &[i8], b: &[i8]) -> 
     exact_bits(path, "i8", metric, got, scalar, expected)
 }
 
-fn tolerance(a_len: usize, term_magnitudes: f64) -> f64 {
+fn reordering_bound(a_len: usize, term_magnitudes: f64) -> f64 {
     let dimension = f64::from(u32::try_from(a_len).expect("test dimension fits in u32"));
-    // Sequential f32 summation has worst-case error <= (n-1)*eps*sum|terms|.
-    // The 4x margin covers FMA fusing and tree-reduction reassociation
-    // (f16->f32 widening is exact and contributes no error). The absolute
-    // floor covers cases whose total term magnitude is so small that the
-    // relative bound falls below f32 rounding noise; exact lane accounting
-    // remains Oracle A's responsibility.
-    (4.0 * dimension * EPSILON * term_magnitudes).max(1e-6)
+    2.0 * dimension * EPSILON * term_magnitudes
 }
 
-fn within_tolerance(
+fn within_reordering_bound(
     path: KernelPath,
     element: &str,
     metric: MetricType,
     got: f32,
     scalar: f32,
-    expected: f64,
-    allowed: f64,
+    bound: f64,
 ) -> CheckResult {
-    let got_error = (f64::from(got) - expected).abs();
-    let scalar_error = (f64::from(scalar) - expected).abs();
-    if !(got_error.is_finite()
-        && got_error <= allowed
-        && scalar_error.is_finite()
-        && scalar_error <= allowed)
-    {
+    let difference = (f64::from(got) - f64::from(scalar)).abs();
+    if !(difference.is_finite() && difference <= bound) {
         return Err(format!(
             "{element}/{metric:?}/{path:?}: got={got:?}, scalar={scalar:?}, \
-             f64-oracle={expected:?}, got-error={got_error:?}, \
-             scalar-error={scalar_error:?}, tolerance={allowed:?}"
+             difference={difference:?}, reordering-bound={bound:?}"
         ));
     }
     Ok(())
 }
 
-fn assert_tolerant_f32(path: KernelPath, metric: MetricType, a: &[f32], b: &[f32]) -> CheckResult {
+// SIMD and scalar reorder the same terms, so |simd-scalar| <= 2*n*EPS*sum|terms|; Oracle A owns lane accounting.
+fn assert_reordered_f32(path: KernelPath, metric: MetricType, a: &[f32], b: &[f32]) -> CheckResult {
     let got = ScoreKernel::<f32>::with_path(metric, path)
         .expect("constructible path")
         .score(a, b);
     let scalar = ScoreKernel::<f32>::with_path(metric, KernelPath::Scalar)
         .expect("scalar path")
         .score(a, b);
-    let (expected, term_magnitudes) = f64_oracle(metric, a, b, f64::from);
-    within_tolerance(
+    let term_magnitudes = f64_oracle(metric, a, b, f64::from).1;
+    within_reordering_bound(
         path,
         "f32",
         metric,
         got,
         scalar,
-        expected,
-        tolerance(a.len(), term_magnitudes),
+        reordering_bound(a.len(), term_magnitudes),
     )
 }
 
-fn assert_tolerant_f16(path: KernelPath, metric: MetricType, a: &[F16], b: &[F16]) -> CheckResult {
+fn assert_reordered_f16(path: KernelPath, metric: MetricType, a: &[F16], b: &[F16]) -> CheckResult {
     let got = ScoreKernel::<F16>::with_path(metric, path)
         .expect("constructible path")
         .score(a, b);
     let scalar = ScoreKernel::<F16>::with_path(metric, KernelPath::Scalar)
         .expect("scalar path")
         .score(a, b);
-    let (expected, term_magnitudes) = f64_oracle(metric, a, b, |value| f64::from(value.to_f32()));
-    within_tolerance(
+    let term_magnitudes = f64_oracle(metric, a, b, |value| f64::from(value.to_f32())).1;
+    within_reordering_bound(
         path,
         "f16",
         metric,
         got,
         scalar,
-        expected,
-        tolerance(a.len(), term_magnitudes),
+        reordering_bound(a.len(), term_magnitudes),
     )
 }
 
@@ -423,7 +409,7 @@ fn run_oracle_b_case(
     with_offsets(f32_a, f32_b, |a, b| {
         for metric in SCORE_METRICS {
             for run in matching_combinations(combinations, TestElement::F32, metric) {
-                assert_tolerant_f32(run.path, metric, a, b)?;
+                assert_reordered_f32(run.path, metric, a, b)?;
                 run.count_oracle_b();
             }
         }
@@ -432,7 +418,7 @@ fn run_oracle_b_case(
     with_offsets(&f16_a, &f16_b, |a, b| {
         for metric in SCORE_METRICS {
             for run in matching_combinations(combinations, TestElement::F16, metric) {
-                assert_tolerant_f16(run.path, metric, a, b)?;
+                assert_reordered_f16(run.path, metric, a, b)?;
                 run.count_oracle_b();
             }
         }
@@ -817,6 +803,56 @@ fn vnni_query_bias_identity_matches_signed_dot_product() {
 }
 
 #[test]
+fn f32_paths_preserve_precision_beyond_f16() {
+    const HIGH: f32 = 1.0 + 839.0 * f32::EPSILON;
+    const PAIRS: usize = 16;
+
+    let mut query = Vec::with_capacity(PAIRS * 2);
+    let mut target = Vec::with_capacity(PAIRS * 2);
+    for _ in 0..PAIRS {
+        query.extend_from_slice(&[HIGH, 1.0]);
+        target.extend_from_slice(&[1.0, -1.0]);
+    }
+
+    let expected = f64_oracle(MetricType::InnerProduct, &query, &target, f64::from).0;
+    let f16_rounded_query: Vec<f32> = query
+        .iter()
+        .copied()
+        .map(|value| F16::from_f32(value).to_f32())
+        .collect();
+    let f16_rounded_expected = f64_oracle(
+        MetricType::InnerProduct,
+        &f16_rounded_query,
+        &target,
+        f64::from,
+    )
+    .0;
+    let f16_relative_shift = (f16_rounded_expected - expected).abs() / expected.abs();
+    assert!(
+        f16_relative_shift.is_finite() && f16_relative_shift > 1e-3,
+        "precision canary does not distinguish f32 from f16: expected={expected:?}, \
+         f16-rounded={f16_rounded_expected:?}, relative-shift={f16_relative_shift:?}"
+    );
+
+    // Catches a kernel that internally degrades precision, which the integer-grid oracle cannot see.
+    let mut constructible_paths = 0;
+    for path in ALL_PATHS {
+        let Ok(kernel) = ScoreKernel::<f32>::with_path(MetricType::InnerProduct, path) else {
+            continue;
+        };
+        constructible_paths += 1;
+        let got = f64::from(kernel.score(&query, &target));
+        let relative_error = (got - expected).abs() / expected.abs();
+        assert!(
+            relative_error.is_finite() && relative_error <= 1e-5,
+            "f32 precision canary failed: path={path:?}, got={got:?}, \
+             f64-oracle={expected:?}, relative-error={relative_error:?}"
+        );
+    }
+    assert!(constructible_paths > 0);
+}
+
+#[test]
 fn all_constructible_paths_match_dual_oracles() {
     let combinations = constructible_combinations();
     assert!(
@@ -857,10 +893,10 @@ fn all_constructible_paths_match_dual_oracles() {
         let path_runs: Vec<&CombinationRun> =
             combinations.iter().filter(|run| run.path == path).collect();
         let exact_case_count: usize = path_runs.iter().map(|run| run.oracle_a_cases.get()).sum();
-        let tolerant_case_count: usize = path_runs.iter().map(|run| run.oracle_b_cases.get()).sum();
+        let oracle_b_case_count: usize = path_runs.iter().map(|run| run.oracle_b_cases.get()).sum();
         println!(
             "path summary: {path:?}; exercised combinations: {}; skipped combinations: {}; \
-             oracle A cases: {exact_case_count}; oracle B cases: {tolerant_case_count}",
+             oracle A cases: {exact_case_count}; oracle B cases: {oracle_b_case_count}",
             path_runs.len(),
             SCORE_METRICS.len() * 3 - path_runs.len(),
         );

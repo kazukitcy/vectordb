@@ -91,21 +91,32 @@ fn bench_single<T: Element>(
     criterion: &mut Criterion,
     element: &str,
     make_values: fn(usize, usize) -> Vec<T>,
-    squared_l2: BaselineFn<T>,
-    neg_dot: BaselineFn<T>,
+    naive_squared_l2: BaselineFn<T>,
+    naive_neg_dot: BaselineFn<T>,
+    safe_squared_l2: BaselineFn<T>,
+    safe_neg_dot: BaselineFn<T>,
 ) {
     for metric in SCORE_METRICS {
         let mut group =
             criterion.benchmark_group(format!("{element}/{}/single", metric_name(metric)));
-        let baseline_fn = baseline_for(metric, squared_l2, neg_dot);
+        let naive_fn = baseline_for(metric, naive_squared_l2, naive_neg_dot);
+        let safe_fn = baseline_for(metric, safe_squared_l2, safe_neg_dot);
 
         for dimension in DIMENSIONS {
             let query = make_values(dimension, 3);
             let target = make_values(dimension, 11);
             group.throughput(Throughput::Elements(dimension as u64));
-            group.bench_function(BenchmarkId::new("baseline", dimension), |bencher| {
+            group.bench_function(BenchmarkId::new("naive", dimension), |bencher| {
                 bencher.iter(|| {
-                    black_box(baseline_fn(
+                    black_box(naive_fn(
+                        black_box(query.as_slice()),
+                        black_box(target.as_slice()),
+                    ))
+                });
+            });
+            group.bench_function(BenchmarkId::new("safe", dimension), |bencher| {
+                bencher.iter(|| {
+                    black_box(safe_fn(
                         black_box(query.as_slice()),
                         black_box(target.as_slice()),
                     ))
@@ -133,26 +144,40 @@ fn bench_batch<T: Element>(
     criterion: &mut Criterion,
     element: &str,
     make_values: fn(usize, usize) -> Vec<T>,
-    squared_l2: BaselineFn<T>,
-    neg_dot: BaselineFn<T>,
+    naive_squared_l2: BaselineFn<T>,
+    naive_neg_dot: BaselineFn<T>,
+    safe_squared_l2: BaselineFn<T>,
+    safe_neg_dot: BaselineFn<T>,
 ) {
     for metric in SCORE_METRICS {
         let mut group =
             criterion.benchmark_group(format!("{element}/{}/contiguous", metric_name(metric)));
-        let baseline_fn = baseline_for(metric, squared_l2, neg_dot);
+        let naive_fn = baseline_for(metric, naive_squared_l2, naive_neg_dot);
+        let safe_fn = baseline_for(metric, safe_squared_l2, safe_neg_dot);
 
         for dimension in DIMENSIONS {
             let query = make_values(dimension, 3);
             let vectors = make_values(dimension * BATCH_SIZE, 11);
             group.throughput(Throughput::Elements((dimension * BATCH_SIZE) as u64));
-            group.bench_function(BenchmarkId::new("baseline", dimension), |bencher| {
+            group.bench_function(BenchmarkId::new("naive", dimension), |bencher| {
                 let mut out = vec![0.0; BATCH_SIZE];
                 bencher.iter(|| {
                     score_baseline_contiguous(
                         black_box(query.as_slice()),
                         black_box(vectors.as_slice()),
                         black_box(out.as_mut_slice()),
-                        baseline_fn,
+                        naive_fn,
+                    );
+                });
+            });
+            group.bench_function(BenchmarkId::new("safe", dimension), |bencher| {
+                let mut out = vec![0.0; BATCH_SIZE];
+                bencher.iter(|| {
+                    score_baseline_contiguous(
+                        black_box(query.as_slice()),
+                        black_box(vectors.as_slice()),
+                        black_box(out.as_mut_slice()),
+                        safe_fn,
                     );
                 });
             });
@@ -212,43 +237,55 @@ fn score_kernels(criterion: &mut Criterion) {
         criterion,
         "f32",
         values_f32,
-        baseline::squared_l2_f32,
-        baseline::neg_dot_f32,
+        baseline::naive_squared_l2_f32,
+        baseline::naive_neg_dot_f32,
+        baseline::safe_squared_l2_f32,
+        baseline::safe_neg_dot_f32,
     );
     bench_batch(
         criterion,
         "f32",
         values_f32,
-        baseline::squared_l2_f32,
-        baseline::neg_dot_f32,
+        baseline::naive_squared_l2_f32,
+        baseline::naive_neg_dot_f32,
+        baseline::safe_squared_l2_f32,
+        baseline::safe_neg_dot_f32,
     );
     bench_single(
         criterion,
         "f16",
         values_f16,
-        baseline::squared_l2_f16,
-        baseline::neg_dot_f16,
+        baseline::naive_squared_l2_f16,
+        baseline::naive_neg_dot_f16,
+        baseline::safe_squared_l2_f16,
+        baseline::safe_neg_dot_f16,
     );
     bench_batch(
         criterion,
         "f16",
         values_f16,
-        baseline::squared_l2_f16,
-        baseline::neg_dot_f16,
+        baseline::naive_squared_l2_f16,
+        baseline::naive_neg_dot_f16,
+        baseline::safe_squared_l2_f16,
+        baseline::safe_neg_dot_f16,
     );
     bench_single(
         criterion,
         "i8",
         values_i8,
-        baseline::squared_l2_i8,
-        baseline::neg_dot_i8,
+        baseline::naive_squared_l2_i8,
+        baseline::naive_neg_dot_i8,
+        baseline::safe_squared_l2_i8,
+        baseline::safe_neg_dot_i8,
     );
     bench_batch(
         criterion,
         "i8",
         values_i8,
-        baseline::squared_l2_i8,
-        baseline::neg_dot_i8,
+        baseline::naive_squared_l2_i8,
+        baseline::naive_neg_dot_i8,
+        baseline::safe_squared_l2_i8,
+        baseline::safe_neg_dot_i8,
     );
 }
 

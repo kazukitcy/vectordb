@@ -128,12 +128,15 @@ fn average_nanoseconds(mut score: impl FnMut() -> f32) -> f64 {
 fn report_element<T: Element>(
     element: &str,
     make_values: fn(usize, usize) -> Vec<T>,
-    squared_l2: BaselineFn<T>,
-    neg_dot: BaselineFn<T>,
+    naive_squared_l2: BaselineFn<T>,
+    naive_neg_dot: BaselineFn<T>,
+    safe_squared_l2: BaselineFn<T>,
+    safe_neg_dot: BaselineFn<T>,
     recorded_lines: &mut [usize; 4],
 ) {
     for metric in SCORE_METRICS {
-        let baseline_fn = baseline_for(metric, squared_l2, neg_dot);
+        let naive_fn = baseline_for(metric, naive_squared_l2, naive_neg_dot);
+        let safe_fn = baseline_for(metric, safe_squared_l2, safe_neg_dot);
         for path in PATHS {
             let Ok(kernel) = ScoreKernel::<T>::with_path(metric, path) else {
                 continue;
@@ -141,15 +144,20 @@ fn report_element<T: Element>(
             for dimension in DIMENSIONS {
                 let query = make_values(dimension, 3);
                 let target = make_values(dimension, 11);
-                let baseline_ns = average_nanoseconds(|| {
-                    baseline_fn(black_box(query.as_slice()), black_box(target.as_slice()))
+                let naive_ns = average_nanoseconds(|| {
+                    naive_fn(black_box(query.as_slice()), black_box(target.as_slice()))
+                });
+                let safe_ns = average_nanoseconds(|| {
+                    safe_fn(black_box(query.as_slice()), black_box(target.as_slice()))
                 });
                 let path_ns = average_nanoseconds(|| {
                     kernel.score(black_box(query.as_slice()), black_box(target.as_slice()))
                 });
-                let factor = baseline_ns / path_ns;
+                let naive_factor = naive_ns / path_ns;
+                let safe_factor = safe_ns / path_ns;
                 println!(
-                    "element={element} metric={} path={} dim={dimension} factor={factor:.3}",
+                    "element={element} metric={} path={} dim={dimension} \
+                     naive_factor={naive_factor:.3} safe_factor={safe_factor:.3}",
                     metric_name(metric),
                     path_name(path),
                 );
@@ -166,22 +174,28 @@ fn speedup_report() {
     report_element(
         "f32",
         values_f32,
-        baseline::squared_l2_f32,
-        baseline::neg_dot_f32,
+        baseline::naive_squared_l2_f32,
+        baseline::naive_neg_dot_f32,
+        baseline::safe_squared_l2_f32,
+        baseline::safe_neg_dot_f32,
         &mut recorded_lines,
     );
     report_element(
         "f16",
         values_f16,
-        baseline::squared_l2_f16,
-        baseline::neg_dot_f16,
+        baseline::naive_squared_l2_f16,
+        baseline::naive_neg_dot_f16,
+        baseline::safe_squared_l2_f16,
+        baseline::safe_neg_dot_f16,
         &mut recorded_lines,
     );
     report_element(
         "i8",
         values_i8,
-        baseline::squared_l2_i8,
-        baseline::neg_dot_i8,
+        baseline::naive_squared_l2_i8,
+        baseline::naive_neg_dot_i8,
+        baseline::safe_squared_l2_i8,
+        baseline::safe_neg_dot_i8,
         &mut recorded_lines,
     );
 
