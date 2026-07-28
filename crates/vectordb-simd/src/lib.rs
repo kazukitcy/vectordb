@@ -404,7 +404,9 @@ impl<T: Element> ScoreKernel<T> {
         let _ = target;
     }
 
-    // On targets without a prefetch primitive the body ignores self entirely.
+    // allow, not expect: the lint fires only on targets without a prefetch
+    // primitive (e.g. wasm32), so an expectation would be unfulfilled on
+    // x86_64/aarch64 builds.
     #[allow(clippy::unused_self)]
     fn prefetch_start(&self, target: &[T]) {
         #[cfg(target_arch = "x86_64")]
@@ -482,7 +484,7 @@ pub fn l2_norm(vector: &[f32]) -> f64 {
 /// Returns the original norm as `f64`. A zero-norm vector is left unchanged
 /// and returns `0.0`. Division uses the `f64` norm for each element; the stored
 /// normalized values remain subject to `f32` rounding.
-#[allow(clippy::cast_possible_truncation)]
+#[expect(clippy::cast_possible_truncation)]
 pub fn l2_normalize(vector: &mut [f32]) -> f64 {
     let norm = l2_norm(vector);
     if norm == 0.0 {
@@ -498,7 +500,8 @@ pub fn l2_normalize(vector: &mut [f32]) -> f64 {
 pub(crate) enum Arch {
     X86_64,
     Aarch64,
-    // Supported-target builds exercise this only through synthetic resolver tests.
+    // allow, not expect: test builds use the variant, so the dead_code
+    // expectation would be unfulfilled under --all-targets.
     #[allow(dead_code)]
     Other,
 }
@@ -523,7 +526,7 @@ pub(crate) struct ImplementedPaths {
 }
 
 // References preserve D5's resolver contract as feature tables grow. See ADR 0002.
-#[allow(clippy::trivially_copy_pass_by_ref)]
+#[expect(clippy::trivially_copy_pass_by_ref)]
 pub(crate) fn resolve_path(
     arch: Arch,
     features: &FeatureSet,
@@ -636,7 +639,7 @@ mod tests {
 
     // Most resolver rules are metric-independent; L2 stands in for those tests.
     // The reference signature mirrors resolve_path's.
-    #[allow(clippy::trivially_copy_pass_by_ref)]
+    #[expect(clippy::trivially_copy_pass_by_ref)]
     fn resolve_l2(
         arch: Arch,
         features: &FeatureSet,
@@ -685,7 +688,7 @@ mod tests {
     }
 
     // Owned results keep the resolver assertions direct and readable.
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn assert_unsupported(result: vectordb_core::Result<KernelPath>) {
         assert!(matches!(result, Err(Error::Unsupported { .. })));
     }

@@ -43,7 +43,7 @@ pub fn naive_neg_dot_f16(a: &[crate::F16], b: &[crate::F16]) -> f32 {
 }
 
 #[inline(never)]
-#[allow(clippy::cast_precision_loss)] // The public i8 contract converts once after accumulation.
+#[expect(clippy::cast_precision_loss)] // The public i8 contract converts once after accumulation.
 pub fn naive_squared_l2_i8(a: &[i8], b: &[i8]) -> f32 {
     let mut sum = 0i32;
     for index in 0..a.len() {
@@ -54,7 +54,7 @@ pub fn naive_squared_l2_i8(a: &[i8], b: &[i8]) -> f32 {
 }
 
 #[inline(never)]
-#[allow(clippy::cast_precision_loss)] // The public i8 contract converts once after accumulation.
+#[expect(clippy::cast_precision_loss)] // The public i8 contract converts once after accumulation.
 pub fn naive_neg_dot_i8(a: &[i8], b: &[i8]) -> f32 {
     let mut sum = 0i32;
     for index in 0..a.len() {
@@ -140,7 +140,7 @@ pub fn safe_neg_dot_f16(a: &[crate::F16], b: &[crate::F16]) -> f32 {
 }
 
 #[inline(never)]
-#[allow(clippy::cast_precision_loss)] // The public i8 contract converts once after accumulation.
+#[expect(clippy::cast_precision_loss)] // The public i8 contract converts once after accumulation.
 pub fn safe_squared_l2_i8(a: &[i8], b: &[i8]) -> f32 {
     let mut accumulators = [0i32; 8];
     let mut a_chunks = a.chunks_exact(8);
@@ -161,7 +161,7 @@ pub fn safe_squared_l2_i8(a: &[i8], b: &[i8]) -> f32 {
 }
 
 #[inline(never)]
-#[allow(clippy::cast_precision_loss)] // The public i8 contract converts once after accumulation.
+#[expect(clippy::cast_precision_loss)] // The public i8 contract converts once after accumulation.
 pub fn safe_neg_dot_i8(a: &[i8], b: &[i8]) -> f32 {
     let mut accumulators = [0i32; 8];
     let mut a_chunks = a.chunks_exact(8);

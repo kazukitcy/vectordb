@@ -40,7 +40,7 @@ pub(crate) fn neg_dot_f16(a: &[F16], b: &[F16]) -> f32 {
 
 // Length and dimension checks live at the public chokepoint.
 // The final conversion has the rounding behavior specified by ADR 0002.
-#[allow(clippy::cast_precision_loss)]
+#[expect(clippy::cast_precision_loss)]
 pub(crate) fn squared_l2_i8(a: &[i8], b: &[i8]) -> f32 {
     let mut sum = 0i32;
     for index in 0..a.len() {
@@ -54,7 +54,7 @@ pub(crate) fn squared_l2_i8(a: &[i8], b: &[i8]) -> f32 {
 // The final conversion has the rounding behavior specified by ADR 0002.
 // Negation happens after the conversion so that an exactly cancelled sum
 // yields -0.0, matching the float kernels' negate-after-reduction contract.
-#[allow(clippy::cast_precision_loss)]
+#[expect(clippy::cast_precision_loss)]
 pub(crate) fn neg_dot_i8(a: &[i8], b: &[i8]) -> f32 {
     let mut sum = 0i32;
     for index in 0..a.len() {
@@ -65,7 +65,7 @@ pub(crate) fn neg_dot_i8(a: &[i8], b: &[i8]) -> f32 {
 
 #[cfg(test)]
 // Exact values are the contract under test.
-#[allow(clippy::float_cmp)]
+#[expect(clippy::float_cmp)]
 mod tests {
     use super::F16;
 

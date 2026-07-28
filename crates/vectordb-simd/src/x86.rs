@@ -1,5 +1,7 @@
 // Intrinsic modules are designed for wildcard import; itemizing dozens of
-// intrinsic names adds churn without clarifying provenance.
+// intrinsic names adds churn without clarifying provenance. allow, not
+// expect: clippy suppresses wildcard_imports in test builds, so the
+// expectation would be unfulfilled under --all-targets.
 #[allow(clippy::wildcard_imports)]
 use std::arch::x86_64::*;
 use std::mem::size_of_val;
@@ -163,7 +165,7 @@ pub(crate) unsafe fn neg_dot_f32(a: &[f32], b: &[f32]) -> f32 {
 
 // Safety preconditions: the caller guarantees equal lengths and that the CPU supports AVX2, FMA,
 // and F16C.
-#[allow(clippy::cast_ptr_alignment)]
+#[expect(clippy::cast_ptr_alignment)]
 #[target_feature(enable = "avx2,fma,f16c")]
 pub(crate) unsafe fn squared_l2_f16(a: &[F16], b: &[F16]) -> f32 {
     let mut first_accumulator = _mm256_setzero_ps();
@@ -241,7 +243,7 @@ pub(crate) unsafe fn squared_l2_f16(a: &[F16], b: &[F16]) -> f32 {
 
 // Safety preconditions: the caller guarantees equal lengths and that the CPU supports AVX2, FMA,
 // and F16C.
-#[allow(clippy::cast_ptr_alignment)]
+#[expect(clippy::cast_ptr_alignment)]
 #[target_feature(enable = "avx2,fma,f16c")]
 pub(crate) unsafe fn neg_dot_f16(a: &[F16], b: &[F16]) -> f32 {
     let mut first_accumulator = _mm256_setzero_ps();
@@ -314,7 +316,7 @@ pub(crate) unsafe fn neg_dot_f16(a: &[F16], b: &[F16]) -> f32 {
 
 // Safety preconditions: the caller guarantees equal lengths, a length no greater than
 // MAX_I8_DIMENSION, and that the CPU supports AVX2.
-#[allow(clippy::cast_ptr_alignment, clippy::cast_precision_loss)]
+#[expect(clippy::cast_ptr_alignment, clippy::cast_precision_loss)]
 #[target_feature(enable = "avx2")]
 pub(crate) unsafe fn squared_l2_i8(a: &[i8], b: &[i8]) -> f32 {
     let mut first_accumulator = _mm256_setzero_si256();
@@ -396,7 +398,7 @@ pub(crate) unsafe fn squared_l2_i8(a: &[i8], b: &[i8]) -> f32 {
 
 // Safety preconditions: the caller guarantees equal lengths, a length no greater than
 // MAX_I8_DIMENSION, and that the CPU supports AVX2.
-#[allow(clippy::cast_ptr_alignment, clippy::cast_precision_loss)]
+#[expect(clippy::cast_ptr_alignment, clippy::cast_precision_loss)]
 #[target_feature(enable = "avx2")]
 pub(crate) unsafe fn neg_dot_i8(a: &[i8], b: &[i8]) -> f32 {
     let mut first_accumulator = _mm256_setzero_si256();
@@ -474,7 +476,7 @@ pub(crate) unsafe fn neg_dot_i8(a: &[i8], b: &[i8]) -> f32 {
 // Safety preconditions: `index..index + 16` is in bounds for `values`, and the CPU supports
 // AVX-512F and F16C.
 #[inline]
-#[allow(clippy::cast_ptr_alignment)]
+#[expect(clippy::cast_ptr_alignment)]
 #[target_feature(enable = "avx512f,f16c")]
 unsafe fn load_f16x16(values: &[F16], index: usize) -> __m512 {
     let low_bits = unsafe {
@@ -726,7 +728,7 @@ pub(crate) unsafe fn neg_dot_f16_avx512(a: &[F16], b: &[F16]) -> f32 {
 // MAX_I8_DIMENSION, and that the CPU supports AVX-512F and AVX-512BW.
 // No VNNI instruction is used: the widening multiply-add needs only F+BW, so this
 // kernel stays available on AVX-512 hardware without VNNI.
-#[allow(clippy::cast_precision_loss, clippy::cast_ptr_alignment)]
+#[expect(clippy::cast_precision_loss, clippy::cast_ptr_alignment)]
 #[target_feature(enable = "avx512f,avx512bw")]
 pub(crate) unsafe fn squared_l2_i8_avx512(a: &[i8], b: &[i8]) -> f32 {
     let mut first_accumulator = _mm512_setzero_si512();
@@ -773,7 +775,7 @@ pub(crate) unsafe fn squared_l2_i8_avx512(a: &[i8], b: &[i8]) -> f32 {
 
 // Safety preconditions: the caller guarantees equal lengths, a length no greater than
 // MAX_I8_DIMENSION, and that the CPU supports AVX-512F, AVX-512BW, and AVX-512VNNI.
-#[allow(clippy::cast_precision_loss, clippy::cast_ptr_alignment)]
+#[expect(clippy::cast_precision_loss, clippy::cast_ptr_alignment)]
 #[target_feature(enable = "avx512f,avx512bw,avx512vnni")]
 pub(crate) unsafe fn neg_dot_i8_avx512(a: &[i8], b: &[i8]) -> f32 {
     let mut dpbusd_accumulator = _mm512_setzero_si512();

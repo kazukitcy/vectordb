@@ -1,5 +1,3 @@
-#![allow(clippy::float_cmp)] // exact values are the contract under test
-
 use std::cell::Cell;
 use std::collections::HashSet;
 
@@ -242,7 +240,7 @@ fn exact_bits(
 }
 
 // The cast is the specified final step of the independent f64 oracle.
-#[allow(clippy::cast_possible_truncation)]
+#[expect(clippy::cast_possible_truncation)]
 fn assert_exact_f32(path: KernelPath, metric: MetricType, a: &[f32], b: &[f32]) -> CheckResult {
     let got = ScoreKernel::<f32>::with_path(metric, path)
         .expect("constructible path")
@@ -255,7 +253,7 @@ fn assert_exact_f32(path: KernelPath, metric: MetricType, a: &[f32], b: &[f32]) 
 }
 
 // The cast is the specified final step of the independent f64 oracle.
-#[allow(clippy::cast_possible_truncation)]
+#[expect(clippy::cast_possible_truncation)]
 fn assert_exact_f16(path: KernelPath, metric: MetricType, a: &[F16], b: &[F16]) -> CheckResult {
     let got = ScoreKernel::<F16>::with_path(metric, path)
         .expect("constructible path")
@@ -268,7 +266,7 @@ fn assert_exact_f16(path: KernelPath, metric: MetricType, a: &[F16], b: &[F16]) 
 }
 
 // The cast pins the kernel's one final exact-integer-to-f32 conversion.
-#[allow(clippy::cast_possible_truncation)]
+#[expect(clippy::cast_possible_truncation)]
 fn assert_exact_i8(path: KernelPath, metric: MetricType, a: &[i8], b: &[i8]) -> CheckResult {
     let got = ScoreKernel::<i8>::with_path(metric, path)
         .expect("constructible path")
@@ -712,7 +710,7 @@ fn run_i8_conversion_boundaries(combinations: &[CombinationRun]) {
 }
 
 // The cast pins the kernel's one final exact-integer-to-f32 conversion.
-#[allow(clippy::cast_possible_truncation)]
+#[expect(clippy::cast_possible_truncation)]
 fn run_i8_max_dimension(combinations: &[CombinationRun]) {
     let query = vec![i8::MIN; MAX_I8_DIMENSION];
     let target = vec![i8::MAX; MAX_I8_DIMENSION];

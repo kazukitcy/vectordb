@@ -1,5 +1,5 @@
-#![allow(clippy::float_cmp)] // exact values are the contract under test
-#![allow(clippy::should_panic_without_expect)] // panic occurrence is the contract under test
+#![expect(clippy::float_cmp)] // exact values are the contract under test
+#![expect(clippy::should_panic_without_expect)] // panic occurrence is the contract under test
 
 use vectordb_simd::{
     Element, Error, F16, KernelPath, MAX_I8_DIMENSION, MetricType, ScoreKernel, l2_norm,

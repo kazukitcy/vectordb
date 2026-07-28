@@ -1,5 +1,7 @@
 // Intrinsic modules are designed for wildcard import; itemizing the NEON
-// intrinsic names adds churn without clarifying provenance.
+// intrinsic names adds churn without clarifying provenance. allow, not
+// expect: clippy suppresses wildcard_imports in test builds, so the
+// expectation would be unfulfilled under --all-targets.
 #[allow(clippy::wildcard_imports)]
 use std::arch::{aarch64::*, asm};
 use std::mem::size_of_val;
@@ -225,7 +227,7 @@ pub(crate) unsafe fn neg_dot_f16(a: &[F16], b: &[F16]) -> f32 {
 
 // Safety preconditions: the caller guarantees equal lengths, a length no greater than
 // MAX_I8_DIMENSION, and that the CPU supports NEON.
-#[allow(clippy::cast_precision_loss)]
+#[expect(clippy::cast_precision_loss)]
 #[target_feature(enable = "neon")]
 pub(crate) unsafe fn squared_l2_i8(a: &[i8], b: &[i8]) -> f32 {
     let mut low_accumulator = vdupq_n_s32(0);
@@ -265,7 +267,7 @@ pub(crate) unsafe fn squared_l2_i8(a: &[i8], b: &[i8]) -> f32 {
 
 // Safety preconditions: the caller guarantees equal lengths, a length no greater than
 // MAX_I8_DIMENSION, and that the CPU supports NEON.
-#[allow(clippy::cast_precision_loss)]
+#[expect(clippy::cast_precision_loss)]
 #[target_feature(enable = "neon")]
 pub(crate) unsafe fn neg_dot_i8(a: &[i8], b: &[i8]) -> f32 {
     let mut first_accumulator = vdupq_n_s32(0);

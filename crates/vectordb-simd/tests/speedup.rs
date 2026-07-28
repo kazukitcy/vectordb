@@ -80,7 +80,7 @@ fn values_f32(len: usize, seed: usize) -> Vec<f32> {
     (0..len)
         .map(|index| {
             let value = (index.wrapping_mul(17).wrapping_add(seed)) % 33;
-            #[allow(clippy::cast_precision_loss)]
+            #[expect(clippy::cast_precision_loss)]
             let value = value as f32;
             value - 16.0
         })
