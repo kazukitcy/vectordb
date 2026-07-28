@@ -36,7 +36,7 @@ metrics. Kernels negate the accumulated dot once, after the final reduction, so
 exact-cancellation inputs produce the same signed zero on every path.
 
 **Cosine.** Cosine is insert-time L2 normalization plus the negated-dot kernel.
-`vectordb-simd` ships the normalization helpers (`l2_norm`, `normalize_l2`);
+`vectordb-simd` ships the normalization helpers (`l2_norm`, `l2_normalize`);
 performing normalization at insert time and retaining the original norm is the
 storage layer's obligation (M3). The helpers return the norm as `f64` because a
 valid f32 vector's norm can exceed `f32::MAX`, and division uses the f64 value.

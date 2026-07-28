@@ -483,7 +483,7 @@ pub fn l2_norm(vector: &[f32]) -> f64 {
 /// and returns `0.0`. Division uses the `f64` norm for each element; the stored
 /// normalized values remain subject to `f32` rounding.
 #[allow(clippy::cast_possible_truncation)]
-pub fn normalize_l2(vector: &mut [f32]) -> f64 {
+pub fn l2_normalize(vector: &mut [f32]) -> f64 {
     let norm = l2_norm(vector);
     if norm == 0.0 {
         return norm;

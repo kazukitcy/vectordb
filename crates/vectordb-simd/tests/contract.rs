@@ -3,7 +3,7 @@
 
 use vectordb_simd::{
     Element, Error, F16, KernelPath, MAX_I8_DIMENSION, MetricType, ScoreKernel, l2_norm,
-    normalize_l2,
+    l2_normalize,
 };
 
 #[test]
@@ -173,25 +173,25 @@ fn prefetch_is_callable_on_every_kernel() {
 }
 
 #[test]
-fn normalize_l2_returns_f64_norm_and_unit_result() {
+fn l2_normalize_returns_f64_norm_and_unit_result() {
     let mut v = [3.0f32, 4.0];
-    assert_eq!(normalize_l2(&mut v), 5.0f64);
+    assert_eq!(l2_normalize(&mut v), 5.0f64);
     assert!((l2_norm(&v) - 1.0).abs() < 1e-6);
 }
 
 #[test]
-fn normalize_l2_handles_norm_beyond_f32_range() {
+fn l2_normalize_handles_norm_beyond_f32_range() {
     let mut v = [f32::MAX, f32::MAX];
-    let norm = normalize_l2(&mut v);
+    let norm = l2_normalize(&mut v);
     assert!(norm > f64::from(f32::MAX));
     assert!(v.iter().all(|x| x.is_finite()));
     assert!((l2_norm(&v) - 1.0).abs() < 1e-6);
 }
 
 #[test]
-fn normalize_l2_leaves_zero_vector_unchanged() {
+fn l2_normalize_leaves_zero_vector_unchanged() {
     let mut v = [0.0f32; 3];
-    assert_eq!(normalize_l2(&mut v), 0.0f64);
+    assert_eq!(l2_normalize(&mut v), 0.0f64);
     assert_eq!(v, [0.0; 3]);
 }
 
