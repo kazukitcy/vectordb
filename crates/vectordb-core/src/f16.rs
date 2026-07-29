@@ -3,7 +3,7 @@
 /// The value's bit pattern is IEEE 754 binary16, accessible through [`F16::from_bits`] and
 /// [`F16::to_bits`]. `F16` is layout-identical to that `u16` bit representation: it is two bytes
 /// in size, two-byte aligned, and a `&[F16]` slice's memory is a sequence of binary16 bit
-/// patterns. No third-party types appear in `F16`'s API. `F16` values may be non-finite;
+/// patterns. `F16` values may be non-finite;
 /// [`Doc::validate`](crate::Doc::validate) rejects non-finite values stored in a document.
 ///
 /// Equality and ordering inherit IEEE 754 partial semantics: NaN is unequal to itself and unordered,

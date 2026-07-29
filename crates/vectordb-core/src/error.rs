@@ -5,8 +5,7 @@ use std::io;
 // Implementers: convert dependency errors at crate boundaries and write the message yourself;
 // forwarding a dependency's error text would couple the public messages to dependency internals.
 /// `Error` is non-exhaustive, so new categories can be added without breaking downstream matches.
-/// Neither types nor message text from third-party dependencies appear in this type, so messages
-/// stay stable across dependency upgrades.
+/// Error messages are stable across dependency upgrades.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
