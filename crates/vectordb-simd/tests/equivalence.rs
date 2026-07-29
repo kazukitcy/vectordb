@@ -1,5 +1,4 @@
 use std::cell::Cell;
-use std::collections::HashSet;
 
 use proptest::prelude::*;
 use proptest::test_runner::{Config as ProptestConfig, TestCaseError, TestRunner};
@@ -107,21 +106,42 @@ impl CombinationRun {
     }
 }
 
-fn required_paths() -> HashSet<KernelPath> {
+fn parse_required_path(name: &str) -> KernelPath {
+    match name {
+        "scalar" => KernelPath::Scalar,
+        "avx2" => KernelPath::Avx2,
+        "avx512" => KernelPath::Avx512,
+        "neon" => KernelPath::Neon,
+        _ => panic!("unknown VECTORDB_SIMD_REQUIRE path: {name}"),
+    }
+}
+
+fn parse_required_element(name: &str) -> TestElement {
+    match name {
+        "f32" => TestElement::F32,
+        "f16" => TestElement::F16,
+        "i8" => TestElement::I8,
+        _ => panic!("unknown VECTORDB_SIMD_REQUIRE element: {name}"),
+    }
+}
+
+// Each entry is `path` (every element must construct) or `path:element`
+// (only that element must construct on the path).
+fn required_combinations() -> Vec<(KernelPath, Option<TestElement>)> {
     let value = std::env::var("VECTORDB_SIMD_REQUIRE").unwrap_or_default();
     value
         .split(',')
-        .filter_map(|name| {
-            let name = name.trim();
-            if name.is_empty() {
+        .filter_map(|entry| {
+            let entry = entry.trim().to_ascii_lowercase();
+            if entry.is_empty() {
                 return None;
             }
-            Some(match name.to_ascii_lowercase().as_str() {
-                "scalar" => KernelPath::Scalar,
-                "avx2" => KernelPath::Avx2,
-                "avx512" => KernelPath::Avx512,
-                "neon" => KernelPath::Neon,
-                _ => panic!("unknown VECTORDB_SIMD_REQUIRE path: {name}"),
+            Some(match entry.split_once(':') {
+                Some((path, element)) => (
+                    parse_required_path(path),
+                    Some(parse_required_element(element)),
+                ),
+                None => (parse_required_path(&entry), None),
             })
         })
         .collect()
@@ -141,7 +161,7 @@ fn construction_error(
 }
 
 fn constructible_combinations() -> Vec<CombinationRun> {
-    let required = required_paths();
+    let required = required_combinations();
     let mut combinations = Vec::new();
     let mut required_failures = Vec::new();
 
@@ -153,7 +173,10 @@ fn constructible_combinations() -> Vec<CombinationRun> {
                         "combination skipped: path={path:?} element={} metric={metric:?}: {error}",
                         element.name()
                     );
-                    if required.contains(&path) {
+                    let is_required = required
+                        .iter()
+                        .any(|(p, e)| *p == path && e.is_none_or(|e| e == element));
+                    if is_required {
                         required_failures.push(format!(
                             "path={path:?} element={} metric={metric:?}: {error}",
                             element.name()

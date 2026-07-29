@@ -75,9 +75,16 @@ representation `u16`. This is a public layout guarantee: SIMD kernels load
 - The F16 layout guarantee constrains future changes: the internal
   representation must remain a transparent binary16 value, and upgrades of the
   backing dependency must preserve its transparent-u16 layout.
-- NEON i8 uses the widening multiply-add sequence on every AArch64 CPU, and
-  NEON f16 converts to f32 through fixed-size stack chunks; the dot-product and
-  native-fp16 instructions are deferred until their intrinsics stabilize.
+- NEON provides f32 kernels only. The hand-written NEON f16 and i8 kernels
+  were removed (2026-07-29, user decision on review evidence): the
+  two-reference benchmark record showed them at or below the scalar path,
+  which the compiler auto-vectorizes on aarch64 because NEON is the baseline
+  ISA — the naive i8 loop measured 2-4x faster than the removed widening
+  kernel across two machines. f16 and i8 auto-select the scalar path on
+  aarch64. Reintroducing a NEON f16/i8 kernel (including a future
+  `stdarch_neon_dotprod`/`stdarch_neon_f16` stabilization) requires a
+  measured margin over both the naive and safe baselines in the recorded
+  speedup evidence.
   AVX-512 execution in CI is conditional on runner hardware; path-selection
   correctness is covered by synthetic-mask resolver tests, and the AVX-512 VNNI
   signedness correction is verified by a portable emulation test that runs on

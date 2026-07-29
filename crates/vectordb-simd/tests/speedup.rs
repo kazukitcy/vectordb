@@ -35,21 +35,24 @@ fn path_index(path: KernelPath) -> usize {
         .expect("known kernel path")
 }
 
+// Entries may carry a `path:element` qualifier (enforced per combination by
+// the equivalence suite); this report gates on the path part only.
 fn required_paths() -> HashSet<KernelPath> {
     let value = std::env::var("VECTORDB_SIMD_REQUIRE").unwrap_or_default();
     value
         .split(',')
-        .filter_map(|name| {
-            let name = name.trim();
-            if name.is_empty() {
+        .filter_map(|entry| {
+            let entry = entry.trim().to_ascii_lowercase();
+            if entry.is_empty() {
                 return None;
             }
-            Some(match name.to_ascii_lowercase().as_str() {
+            let path = entry.split_once(':').map_or(entry.as_str(), |(p, _)| p);
+            Some(match path {
                 "scalar" => KernelPath::Scalar,
                 "avx2" => KernelPath::Avx2,
                 "avx512" => KernelPath::Avx512,
                 "neon" => KernelPath::Neon,
-                _ => panic!("unknown VECTORDB_SIMD_REQUIRE path: {name}"),
+                _ => panic!("unknown VECTORDB_SIMD_REQUIRE path: {path}"),
             })
         })
         .collect()

@@ -194,12 +194,6 @@ mod sealed {
                 super::x86::squared_l2_f16_avx512,
                 super::x86::neg_dot_f16_avx512,
             ));
-            #[cfg(target_arch = "aarch64")]
-            let table = table.with_neon(metric_kernel(
-                metric,
-                super::aarch64::squared_l2_f16,
-                super::aarch64::neg_dot_f16,
-            ));
             table
         }
     }
@@ -220,12 +214,6 @@ mod sealed {
                 metric,
                 super::x86::squared_l2_i8_avx512,
                 super::x86::neg_dot_i8_avx512,
-            ));
-            #[cfg(target_arch = "aarch64")]
-            let table = table.with_neon(metric_kernel(
-                metric,
-                super::aarch64::squared_l2_i8,
-                super::aarch64::neg_dot_i8,
             ));
             table
         }

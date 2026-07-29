@@ -45,7 +45,7 @@ jobs:
           - name: macOS aarch64
             runner: macos-latest
             target: aarch64-apple-darwin
-            simd_require: neon
+            simd_require: "neon:f32"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install pinned Rust toolchain
