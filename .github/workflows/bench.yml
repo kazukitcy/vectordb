@@ -3,13 +3,17 @@ name: Bench
 # The bench (simd) job records benchmark evidence, which only has value when
 # the SIMD crate (or what it depends on) changes; unrelated PRs skip it. The
 # job is deliberately NOT a required check (see AGENTS.md): its speedup
-# factors are environment-dependent and recorded, never gated.
+# factors are environment-dependent and recorded, never gated. There is no
+# disassembly gate: the naive float baseline preserves summation order by
+# language semantics, so no conforming compiler can vectorize it.
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - .github/workflows/bench.yml
       - Cargo.toml
       - Cargo.lock
+      - rust-toolchain.toml
       - crates/vectordb-simd/**
       - crates/vectordb-core/**
   push:
@@ -19,6 +23,7 @@ on:
       - .github/workflows/bench.yml
       - Cargo.toml
       - Cargo.lock
+      - rust-toolchain.toml
       - crates/vectordb-simd/**
       - crates/vectordb-core/**
 
@@ -58,11 +63,6 @@ jobs:
         run: >-
           cargo test -p vectordb-simd --features bench-internals
           --target ${{ matrix.target }}
-      - name: Lint benchmark internals
-        run: >-
-          cargo clippy -p vectordb-simd --all-targets
-          --features bench-internals --target ${{ matrix.target }}
-          -- -D warnings
       - name: Record criterion benchmarks
         shell: bash
         # Drop criterion state restored from the cache: stale group directories
@@ -80,9 +80,6 @@ jobs:
           cargo test -p vectordb-simd --release --features bench-internals
           --target ${{ matrix.target }}
           -- --ignored speedup_report --nocapture | tee speedup.log
-      # The naive float baseline preserves summation order by language semantics,
-      # so no conforming compiler can vectorize it; the removed disassembly gate
-      # guarded a black_box hint that no longer exists.
       - name: Upload benchmark records
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

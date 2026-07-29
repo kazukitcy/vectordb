@@ -75,8 +75,13 @@ protection for `main`), require pull requests and status checks, and select:
 - `sanitizer (TSan)`
 - `cargo-deny`
 
+Never require `bench (simd)` (in `bench.yml`): it is path-filtered, so it reports no
+status on pull requests that do not touch its paths, and requiring it would leave those
+pull requests waiting forever. Its benchmark records are informational by design.
+
 Do not require `miri (codec allowlist placeholder)` yet. The job is a policy placeholder that always
 passes until the first pure codec tests are added. Once those tests exist, replace the placeholder
 with actual `cargo +nightly miri test` commands and add the job to the required list.
 
-Keep this list synchronized with `.github/workflows/ci.yml` whenever job names change.
+Keep this list synchronized with the workflows under `.github/workflows/` whenever job
+names change.

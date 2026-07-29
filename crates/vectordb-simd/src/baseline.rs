@@ -194,12 +194,24 @@ mod tests {
 
     #[test]
     fn baseline_families_equal_public_scalar_path_on_integer_values() {
-        let a_f32 = [1.0, 2.0, 3.0, -4.0, 5.0, -6.0, 7.0, 8.0, -9.0, 10.0, 11.0];
-        let b_f32 = [4.0, 6.0, 8.0, 2.0, -3.0, 1.0, 5.0, -7.0, 9.0, 0.0, -2.0];
+        // 19 elements = two full chunks_exact(8) chunks plus a remainder, so
+        // the multi-chunk accumulation and the tail are both exercised.
+        let a_f32 = [
+            1.0, 2.0, 3.0, -4.0, 5.0, -6.0, 7.0, 8.0, -9.0, 10.0, 11.0, -12.0, 13.0, 14.0, -15.0,
+            16.0, 2.0, -3.0, 4.0,
+        ];
+        let b_f32 = [
+            4.0, 6.0, 8.0, 2.0, -3.0, 1.0, 5.0, -7.0, 9.0, 0.0, -2.0, 3.0, -8.0, 6.0, 7.0, -1.0,
+            5.0, 2.0, -6.0,
+        ];
         let a_f16 = a_f32.map(F16::from_f32);
         let b_f16 = b_f32.map(F16::from_f32);
-        let a_i8 = [1, 2, 3, -4, 5, -6, 7, 8, -9, 10, 11];
-        let b_i8 = [4, 6, 8, 2, -3, 1, 5, -7, 9, 0, -2];
+        let a_i8 = [
+            1, 2, 3, -4, 5, -6, 7, 8, -9, 10, 11, -12, 13, 14, -15, 16, 2, -3, 4,
+        ];
+        let b_i8 = [
+            4, 6, 8, 2, -3, 1, 5, -7, 9, 0, -2, 3, -8, 6, 7, -1, 5, 2, -6,
+        ];
 
         let l2_f32 = ScoreKernel::<f32>::with_path(MetricType::L2, KernelPath::Scalar).unwrap();
         let dot_f32 =

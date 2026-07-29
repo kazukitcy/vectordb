@@ -16,3 +16,4 @@ or remove entries whenever a naming decision accepts or rejects a synonym.
 | score | Smaller-is-better f32 kernel output (squared L2, negated dot); canonical in kernel API names | "distance" for negated-dot output: it is not a metric — reserve "distance" for prose about true metrics |
 | kernel path | The instruction-set path a score kernel executes on (`KernelPath`) | "backend", "ISA level" |
 | prefetch | Best-effort cache hint that a vector will be scored soon; may be a no-op | "preload": implies a guaranteed fetch |
+| `l2_normalize` | In-place unit-L2 normalization returning the original norm as `f64` | "normalize_l2": breaks the `l2_*` prefix family's word order |
