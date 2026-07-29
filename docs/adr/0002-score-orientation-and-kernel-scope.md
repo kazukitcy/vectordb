@@ -84,7 +84,11 @@ representation `u16`. This is a public layout guarantee: SIMD kernels load
   aarch64. Reintroducing a NEON f16/i8 kernel (including a future
   `stdarch_neon_dotprod`/`stdarch_neon_f16` stabilization) requires a
   measured margin over both the naive and safe baselines in the recorded
-  speedup evidence.
+  speedup evidence. A side effect of the removal: prefetch dispatch is keyed
+  on the resolved path, so `score_many`'s automatic hint and the public
+  `prefetch` hook are no-ops for f16/i8 on aarch64 (the scalar path never
+  prefetches). This loss is unmeasured; re-evaluate it with real batch
+  workloads when M4's graph traversal lands.
   AVX-512 execution in CI is conditional on runner hardware; path-selection
   correctness is covered by synthetic-mask resolver tests, and the AVX-512 VNNI
   signedness correction is verified by a portable emulation test that runs on

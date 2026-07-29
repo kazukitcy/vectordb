@@ -229,3 +229,21 @@ fn cosine_and_inner_product_share_score_kernels() {
     );
     assert_cosine_matches_inner_product(&[1i8, -2, 3], &[-4, 5, 6]);
 }
+
+// Pins the ADR 0002 amendment: NEON provides f32 kernels only; f16/i8
+// auto-select the scalar path. Reintroduction must consciously break this.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn aarch64_provides_neon_for_f32_only() {
+    for metric in [MetricType::L2, MetricType::InnerProduct, MetricType::Cosine] {
+        assert_eq!(
+            ScoreKernel::<f32>::new(metric).path(),
+            KernelPath::Neon,
+            "f32 must keep its NEON kernel"
+        );
+        assert_eq!(ScoreKernel::<F16>::new(metric).path(), KernelPath::Scalar);
+        assert_eq!(ScoreKernel::<i8>::new(metric).path(), KernelPath::Scalar);
+        assert!(ScoreKernel::<F16>::with_path(metric, KernelPath::Neon).is_err());
+        assert!(ScoreKernel::<i8>::with_path(metric, KernelPath::Neon).is_err());
+    }
+}

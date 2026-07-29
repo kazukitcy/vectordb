@@ -10,7 +10,7 @@ use std::mem::size_of_val;
 // were removed after the two-reference benchmark record showed them at or
 // below the scalar path, which the compiler auto-vectorizes on aarch64 (NEON
 // is the baseline ISA; the i8 naive loop measured 2-4x faster than the removed
-// widening kernel — see ADR 0002 and the adjudication log). Reintroduction
+// widening kernel — see ADR 0002). Reintroduction
 // requires a measured margin over both the naive and safe baselines.
 //
 // Float kernels process paired four-lane chunks with independent accumulators, combine them once,

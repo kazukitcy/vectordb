@@ -261,7 +261,9 @@ impl<T: Element> ScoreKernel<T> {
     /// # Errors
     ///
     /// Returns [`Error::Unsupported`] when the current CPU or target
-    /// architecture does not support `path` for `T`.
+    /// architecture does not support `path` for `T`, or when no kernel is
+    /// implemented for that combination ([`KernelPath::Neon`] currently
+    /// carries `f32` kernels only).
     ///
     /// # Panics
     ///
@@ -366,8 +368,7 @@ impl<T: Element> ScoreKernel<T> {
         let dimension = query.len();
         // Sequential rows are covered by hardware stride prefetchers; automatic
         // full-row prefetch measured 1.29x slower at dimension 1536 (one-off
-        // review measurement, NEON; recorded in the adjudication log, not
-        // re-measured in CI).
+        // review measurement, NEON; not re-measured in CI).
         for (index, score) in out.iter_mut().enumerate() {
             let start = index * dimension;
             *score = self.invoke(query, &vectors[start..start + dimension]);

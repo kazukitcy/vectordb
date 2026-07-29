@@ -46,7 +46,16 @@ fn required_paths() -> HashSet<KernelPath> {
             if entry.is_empty() {
                 return None;
             }
-            let path = entry.split_once(':').map_or(entry.as_str(), |(p, _)| p);
+            let path = match entry.split_once(':') {
+                Some((path, element)) => {
+                    assert!(
+                        matches!(element, "f32" | "f16" | "i8"),
+                        "unknown VECTORDB_SIMD_REQUIRE element: {element}"
+                    );
+                    path
+                }
+                None => entry.as_str(),
+            };
             Some(match path {
                 "scalar" => KernelPath::Scalar,
                 "avx2" => KernelPath::Avx2,
