@@ -23,7 +23,9 @@ scalar or text indexes.
 Scalar coverage includes `Bool`, `I32`, `I64`, `U32`, `U64`, `F32`, and `F64`, plus arrays of each
 scalar type. M6 must define which dense source types can be quantized into which index formats; the
 roadmap currently commits to F16/I8/I4 quantized indexes but does not define the full compatibility
-matrix between source types and quantized formats. I4 requires an even vector dimension. An optional
+matrix between source types and quantized formats. Cosine on raw dense `I8` assumes inputs that were
+unit-normalized in f32 and then quantized externally; the end-to-end i8 cosine semantics (scale/bias
+metadata and correction terms) are defined in M6. I4 requires an even vector dimension. An optional
 learned rotation may precede I8 or I4.
 
 Flat is the fallback when a vector field has no explicitly built index. Sparse HNSW shares the dense

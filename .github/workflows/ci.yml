@@ -20,9 +20,11 @@ jobs:
           - name: Linux x86_64
             runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            simd_require: avx2
           - name: macOS aarch64
             runner: macos-latest
             target: aarch64-apple-darwin
+            simd_require: "neon:f32"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install pinned Rust toolchain
@@ -38,8 +40,23 @@ jobs:
         run: cargo fmt --all --check
       - name: Lint
         run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
+      # bench-internals targets carry required-features, so the workspace lint
+      # above skips them; this keeps them inside the required -D warnings gate.
+      - name: Lint benchmark internals
+        run: >-
+          cargo clippy -p vectordb-simd --all-targets
+          --features bench-internals --target ${{ matrix.target }}
+          -- -D warnings
       - name: Test
+        env:
+          VECTORDB_SIMD_REQUIRE: ${{ matrix.simd_require }}
         run: cargo test --workspace --target ${{ matrix.target }}
+      # The baseline module is feature-gated, so the workspace test above never
+      # runs its equality tests; this keeps them inside the required gate.
+      - name: Test benchmark internals (unit)
+        run: >-
+          cargo test -p vectordb-simd --features bench-internals --lib
+          --target ${{ matrix.target }}
 
   sanitizer:
     name: sanitizer (${{ matrix.name }})
@@ -67,8 +84,10 @@ jobs:
         env:
           RUSTFLAGS: -Zsanitizer=${{ matrix.sanitizer }}
           RUSTDOCFLAGS: -Zsanitizer=${{ matrix.sanitizer }}
+        # Benches are excluded from sanitizer builds: criterion under -Zbuild-std doubles the build
+        # for no test value; bench code paths are covered by the test targets.
         run: >-
-          cargo +nightly test --workspace --all-targets -Zbuild-std
+          cargo +nightly test --workspace --tests -Zbuild-std
           --target x86_64-unknown-linux-gnu
 
   miri-codecs:

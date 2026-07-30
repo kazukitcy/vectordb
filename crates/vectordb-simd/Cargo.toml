@@ -5,8 +5,27 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[lib]
+bench = false
+
+[features]
+bench-internals = []
+
 [dependencies]
 vectordb-core.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "score"
+harness = false
+required-features = ["bench-internals"]
+
+[[test]]
+name = "speedup"
+required-features = ["bench-internals"]
 
 [lints]
 workspace = true
